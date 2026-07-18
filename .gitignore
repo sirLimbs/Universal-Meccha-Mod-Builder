@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Local application settings (may contain paths or Steam login arguments)
+build_meccha_mod_gui_settings_v3.json
+
+# Private/local build profiles
+build_profiles/*.json
+!build_profiles/.gitkeep
+!build_profiles/example.json
+
+# PyInstaller temporary build output
+build/
+*.spec
+
+# Include only the final public executable
+dist/*
+!dist/Meccha Mod Builder.exe
+
+# Unreal generated output
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+
+# Steam Workshop payload/output
+*.pak
+*.ucas
+*.utoc
+AssetRegistry.bin
+my_item.vdf
+
+# Editors and OS files
+.idea/
+.vscode/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+desktop.ini

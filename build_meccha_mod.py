@@ -1,8 +1,8 @@
 import argparse
 import json
 import os
-import re
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -466,8 +466,10 @@ def launch_gui():
         def hide(self, _event=None):
             if self.window:
                 self.window.destroy()
-                self.window = None
-
+                self.window = None;
+        window_icon_refs = {
+            "photo": None,
+        }
 
 
     try:
@@ -480,12 +482,32 @@ def launch_gui():
 
     root = tk.Tk()
     root.title("Universal Meccha Mod Builder")
+
+    def apply_window_icon():
+        try:
+            if WINDOW_ICON_PATH.is_file():
+                root.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
+            else:
+                print(f"ICO file does not exist: {WINDOW_ICON_PATH}")
+        except Exception as exc:
+            print(f"iconbitmap failed: {exc}")
+
+    apply_window_icon()
+
+    try:
+        if WINDOW_ICON_PATH.exists():
+            root.iconbitmap(default=str(WINDOW_ICON_PATH))
+    except Exception as exc:
+        print("Could not set initial window icon:", exc)
+
     branding_refs = {
     "window_icon": None,
     "header_logo": None,
 }
     root.geometry("1060x760")
     root.minsize(820, 560)
+    root.after_idle(apply_window_icon)
+    root.after(250, apply_window_icon)
 
     PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -640,36 +662,25 @@ def launch_gui():
     header_image_ref = {"image": None}
 
 
-
     def apply_hardcoded_branding():
         try:
-            if HEADER_LOGO_PATH.exists():
-                if pillow_available:
-                    image = Image.open(HEADER_LOGO_PATH).convert("RGBA")
-                    image.thumbnail((64, 64), Image.Resampling.LANCZOS)
-                    window_photo = ImageTk.PhotoImage(image)
-                else:
-                    window_photo = tk.PhotoImage(file=str(HEADER_LOGO_PATH))
-
-                root.iconphoto(True, window_photo)
-                branding_refs["window_icon"] = window_photo
-        except Exception as exc:
-            print("Could not apply window icon:", exc)
-
-        # 2. Apply header image
-        try:
-            if HEADER_LOGO_PATH.exists():
+            if HEADER_LOGO_PATH.is_file():
                 if pillow_available:
                     image = Image.open(HEADER_LOGO_PATH).convert("RGBA")
                     image.thumbnail((56, 56), Image.Resampling.LANCZOS)
                     header_photo = ImageTk.PhotoImage(image)
                 else:
-                    header_photo = tk.PhotoImage(file=str(HEADER_LOGO_PATH))
+                    header_photo = tk.PhotoImage(
+                        file=str(HEADER_LOGO_PATH.resolve())
+                    )
 
                 header_logo.configure(image=header_photo, text="")
                 branding_refs["header_logo"] = header_photo
+            else:
+                print(f"Header logo not found: {HEADER_LOGO_PATH}")
         except Exception as exc:
-            print("Could not apply header logo:", exc)
+            print(f"Could not apply header logo: {exc}")
+
     # The action bar is packed first at the bottom, so Build/Cancel stay visible
     # at every supported window size.
     action_host = ttk.Frame(root, padding=(10, 6))
@@ -737,18 +748,32 @@ def launch_gui():
     form.columnconfigure(1, weight=1)
     row = 0
 
+    field_rows = {}
+
     def add_entry(label_text, key, browse=None):
         nonlocal row
+
+        current_row = row
+        widgets = []
+
         label = ttk.Label(form, text=label_text)
-        label.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        label.grid(row=current_row, column=0, sticky="w", padx=(0, 8), pady=4)
+        widgets.append(label)
+
         entry = ttk.Entry(form, textvariable=fields[key])
-        entry.grid(row=row, column=1, sticky="ew", pady=4)
+        entry.grid(row=current_row, column=1, sticky="ew", pady=4)
+        widgets.append(entry)
+
         ToolTip(label, hints.get(key, ""))
         ToolTip(entry, hints.get(key, ""))
+
         if browse:
             button = ttk.Button(form, text="Browse…", command=browse)
-            button.grid(row=row, column=2, padx=(8, 0), pady=4)
+            button.grid(row=current_row, column=2, padx=(8, 0), pady=4)
             ToolTip(button, hints.get(key, ""))
+            widgets.append(button)
+
+        field_rows[key] = widgets
         row += 1
         return entry
 
@@ -839,6 +864,42 @@ def launch_gui():
     add_entry("SteamCMD.exe", "steamcmd", browse_steamcmd)
     add_entry("Steam login args", "steam_login")
 
+    steam_login_warning = ttk.Label(
+        form,
+        text=(
+            "LOCAL ONLY — OPTIONAL. Recommended: log in through SteamCMD beforehand, "
+            "or upload the completed build manually with SteamCMD."
+        ),
+        foreground="#e05252",
+        wraplength=720,
+        justify="left",
+    )
+
+    steam_login_warning.grid(
+        row=row,
+        column=1,
+        columnspan=2,
+        sticky="w",
+        pady=(0, 8),
+    )
+
+    row += 1
+
+    def update_steamcmd_visibility():
+        visible = flags["upload"].get()
+
+        for key in ("steamcmd", "steam_login"):
+            for widget in field_rows.get(key, []):
+                if visible:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
+
+        if visible:
+            steam_login_warning.grid()
+        else:
+            steam_login_warning.grid_remove()
+
     theme_frame = ttk.Frame(form)
     theme_frame.grid(row=row, column=0, columnspan=3, sticky="w", pady=(4, 0))
     ttk.Label(theme_frame, text="Appearance").pack(side="left", padx=(0, 8))
@@ -862,7 +923,14 @@ def launch_gui():
     clean = ttk.Checkbutton(options, text="Clean Workshop first", variable=flags["clean_workshop"])
     clean.pack(side="left", padx=6)
     ToolTip(clean, hints["clean_workshop"])
-    ttk.Checkbutton(options, text="Upload with SteamCMD", variable=flags["upload"]).pack(side="left", padx=6)
+    upload_checkbox = ttk.Checkbutton(
+        options,
+        text="Upload with SteamCMD",
+        variable=flags["upload"],
+        command=update_steamcmd_visibility,
+    )
+
+    upload_checkbox.pack(side="left", padx=6)
 
     profile_bar = ttk.LabelFrame(outer, text="Profiles", padding=8)
     profile_bar.pack(fill="x", pady=(8, 0))
@@ -956,6 +1024,7 @@ def launch_gui():
         if wanted_plugin in plugin_combo["values"]:
             fields["plugin"].set(wanted_plugin)
         apply_theme()
+        update_steamcmd_visibility()
         status_var.set(f"Loaded profile: {name}")
 
     def delete_profile():
@@ -1132,6 +1201,7 @@ def launch_gui():
             pass
         root.after(100, poll_queue)
 
+
     def open_workshop():
         path = fields["workshop"].get().strip()
         if path and Path(path).exists():
@@ -1152,6 +1222,7 @@ def launch_gui():
     refresh_plugins()
     apply_theme()
     apply_hardcoded_branding()
+    update_steamcmd_visibility()
     poll_queue()
     root.mainloop()
 
