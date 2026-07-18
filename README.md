@@ -30,7 +30,6 @@ The tool automates Unreal Automation Tool (`RunUAT.bat`) full-game release build
 - Persistent GUI settings
 - Dark and light themes
 - Live subprocess output, progress indication, and build cancellation
-- Optional PNG/ICO branding and PyInstaller-compatible resource lookup
 
 ## Requirements
 
