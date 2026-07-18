@@ -2,6 +2,12 @@
 
 A Windows GUI and command-line utility for building, packaging, staging, and optionally uploading custom **Meccha Chameleon** maps created with the Unreal Engine mod kit.
 
+<p align="center">
+  <a href="https://i.imgur.com/4Gbz25h.png">
+    <img src="https://i.imgur.com/4Gbz25h.png" alt="Meccha Mod Builder preview" width="900">
+  </a>
+</p>
+
 The tool automates Unreal Automation Tool (`RunUAT.bat`) full-game release builds and plugin-based DLC/mod builds, locates the generated IoStore payload, prepares a clean Steam Workshop staging directory, creates the Workshop VDF manifest, and can publish the item through SteamCMD.
 
 ## Features
