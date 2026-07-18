@@ -11,8 +11,27 @@ from datetime import datetime
 from pathlib import Path
 
 MECCHA_APP_ID = "4704690" #DO NOT CHANGE
-SETTINGS_FILE = Path(__file__).with_name("build_meccha_mod_gui_settings_v3.json")
-PROFILES_DIR = Path(__file__).with_name("build_profiles")
+
+def user_data_dir() -> Path:
+    """
+    Return a persistent, writable per-user data directory.
+
+    Windows example:
+    C:\\Users\\Username\\AppData\\Roaming\\Meccha Mod Builder
+    """
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA", Path.home()))
+    else:
+        base = Path.home() / ".config"
+
+    app_dir = base / "Meccha Mod Builder"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    return app_dir
+
+
+USER_DATA_DIR = user_data_dir()
+SETTINGS_FILE = USER_DATA_DIR / "build_meccha_mod_gui_settings_v3.json"
+PROFILES_DIR = USER_DATA_DIR / "build_profiles"
 GUI_SETTINGS_VERSION = 3
 
 def resource_path(*parts: str) -> Path:
@@ -548,8 +567,8 @@ def launch_gui():
     }
 
     hints = {
-        "ue": r"Example: Z:\Program Files\Epic Games\UE_5.6\Engine\Build\BatchFiles\RunUAT.bat",
-        "project": r"Example: Z:\MecchaCModKit_Load\MecchaCModKit_Load\MecchaCModKit_Load.uproject",
+        "ue": r"Example: C:\Program Files\Epic Games\UE_5.6\Engine\Build\BatchFiles\RunUAT.bat",
+        "project": r"Example: C:\MecchaCModKit_Load\MecchaCModKit_Load\MecchaCModKit_Load.uproject",
         "plugin": (
             "Exact plugin folder/.uplugin name containing this map's imported assets.\n"
             "Generic examples: MyMapUGC or CustomMapUGC.\n"
@@ -561,6 +580,7 @@ def launch_gui():
         ),
         "workshop": r"Example: C:\Steam_Workshop\MyMapUGC",
         "preview": r"Example: C:\Steam_Workshop\MyMapUGC\preview.png",
+        "profiles": f"Profiles are saved locally in:\n{PROFILES_DIR}",
         "publishedfileid": "0 creates a new item. An existing numeric ID updates that item.",
         "visibility": "0 = Public, 1 = Friends-only, 2 = Private.",
         "steamcmd": r"Example: C:\steamcmd\steamcmd.exe",
@@ -939,6 +959,9 @@ def launch_gui():
     profile_combo = ttk.Combobox(profile_bar, textvariable=profile_var, state="readonly", width=38)
     profile_combo.pack(side="left", padx=(0, 8))
 
+    
+    ToolTip(profile_combo, hints["profiles"])
+
     status_frame = ttk.Frame(outer)
     status_frame.pack(fill="x", pady=(10, 4))
     status_var = tk.StringVar(value="Ready")
@@ -1038,7 +1061,15 @@ def launch_gui():
     ttk.Button(profile_bar, text="Save Current", command=save_profile).pack(side="left", padx=4)
     ttk.Button(profile_bar, text="Load", command=load_profile).pack(side="left", padx=4)
     ttk.Button(profile_bar, text="Delete", command=delete_profile).pack(side="left", padx=4)
-    ttk.Button(profile_bar, text="Open Profiles Folder", command=lambda: os.startfile(PROFILES_DIR)).pack(side="left", padx=4)
+    open_profiles_button = ttk.Button(
+        profile_bar,
+        text="Open Local Profiles Folder",
+        command=lambda: os.startfile(PROFILES_DIR),
+    )
+
+    open_profiles_button.pack(side="left", padx=4)
+
+    ToolTip(open_profiles_button, hints["profiles"])
 
     def save_settings():
         SETTINGS_FILE.write_text(
