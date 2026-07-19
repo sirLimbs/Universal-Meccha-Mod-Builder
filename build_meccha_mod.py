@@ -1108,9 +1108,17 @@ def launch_gui():
             raise ValueError("SteamCMD path is required when Upload is enabled.")
 
     def build_command():
-        cmd = [
-            sys.executable,
-            str(Path(__file__).resolve()),
+        if getattr(sys, "frozen", False):
+            # Running as the packaged PyInstaller executable.
+            cmd = [sys.executable]
+        else:
+            # Running directly from the Python source file.
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+            ]
+
+        cmd.extend([
             "--ue", fields["ue"].get().strip(),
             "--project", fields["project"].get().strip(),
             "--plugin", fields["plugin"].get().strip(),
@@ -1124,19 +1132,33 @@ def launch_gui():
             "--title", fields["title"].get(),
             "--description", fields["description"].get(),
             "--changenote", fields["changenote"].get(),
-        ]
+        ])
+
         if not flags["build_full"].get():
             cmd.append("--skip-full-game")
+
         if not flags["build_mod"].get():
             cmd.append("--skip-mod")
+
         if flags["copy_only"].get():
             cmd.append("--copy-only")
+
         if flags["clean_workshop"].get():
             cmd.append("--clean-workshop")
+
         if flags["upload"].get():
-            cmd.extend(["--upload", "--steamcmd", fields["steamcmd"].get().strip()])
+            cmd.extend([
+                "--upload",
+                "--steamcmd",
+                fields["steamcmd"].get().strip(),
+            ])
+
             if fields["steam_login"].get().strip():
-                cmd.extend(["--steam-login", fields["steam_login"].get().strip()])
+                cmd.extend([
+                    "--steam-login",
+                    fields["steam_login"].get().strip(),
+                ])
+
         return cmd
 
     def reader_thread(process):
