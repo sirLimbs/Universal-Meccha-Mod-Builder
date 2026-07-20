@@ -715,9 +715,24 @@ def resource_path(*parts: str) -> Path:
     return base_dir.joinpath(*parts)
 
 
-WINDOW_ICON_PATH = resource_path("icon", "icon.ico")
-HEADER_LOGO_PATH = resource_path("icon", "icon.png")
-GIT_LOGO_PATH = resource_path("icon", "github_icon.png")
+RESOURCES_DIR = resource_path("resources")
+ICON_DIR = RESOURCES_DIR / "icon"
+CURSOR_DIR = RESOURCES_DIR / "cursor"
+SPINNER_DIR = RESOURCES_DIR / "spinner"
+
+WINDOW_ICON_PATH = ICON_DIR / "icon.ico"
+HEADER_LOGO_PATH = ICON_DIR / "header_icon.png"
+ICON_IMAGE_PATH = ICON_DIR / "icon_source.png"
+GIT_LOGO_PATH = ICON_DIR / "github_icon.png"
+
+# cursor.png remains the editable source artwork. Tk requires a real .cur file
+# for a native Windows cursor, so cursor.cur is used automatically when present.
+CURSOR_SOURCE_PATH = CURSOR_DIR / "cursor.png"
+CURSOR_FILE_PATH = CURSOR_DIR / "cursor.cur"
+GENERATED_CURSOR_PATH = CACHE_DIR / "meccha_cursor.cur"
+
+# Retained as packaged artwork. The active spinner uses Tk only.
+SPINNER_SVG_PATH = SPINNER_DIR / "spinner.svg"
 
 APP_ICON_FILE = WINDOW_ICON_PATH
 APP_LOGO_FILE = HEADER_LOGO_PATH
@@ -1190,10 +1205,12 @@ def main_cli(argv=None):
 
     if not args.copy_only:
         if not args.skip_full_game:
+            print("=== PIPELINE:BUILD_FULL ===", flush=True)
             build_full_game(ue, project, project_root, args.release)
         else:
             print("\nSkipping Full Game build.")
         if not args.skip_mod:
+            print("=== PIPELINE:BUILD_MOD ===", flush=True)
             build_mod_dlc(
                 ue, project, project_root, args.plugin, args.release, args.map_path
             )
@@ -1228,6 +1245,7 @@ def main_cli(argv=None):
         print_recent_payload_candidates(project_root, args.plugin)
         raise
 
+    print("=== PIPELINE:COPY_FILES ===", flush=True)
     preview_dst, _ = copy_payload_to_workshop(payload, workshop, preview)
     vdf_path = workshop / "my_item.vdf"
     write_vdf(
@@ -1258,8 +1276,10 @@ def main_cli(argv=None):
             raise RuntimeError("--upload requires --steamcmd")
         steamcmd = require_file(Path(args.steamcmd), "steamcmd.exe")
         print("\n=== Uploading with SteamCMD ===")
+        print("=== PIPELINE:UPLOAD ===", flush=True)
         run_steamcmd(steamcmd, vdf_path, args.steam_login)
 
+    print("=== PIPELINE:DONE ===", flush=True)
     print("\n=== DONE ===")
 
 
@@ -1350,15 +1370,15 @@ def launch_gui():
         splash_frame = ttk.Frame(splash, padding=(24, 18))
         splash_frame.pack(fill="both", expand=True)
 
-        if HEADER_LOGO_PATH.is_file():
+        if ICON_IMAGE_PATH.is_file():
             try:
                 if pillow_available:
-                    image = Image.open(HEADER_LOGO_PATH).convert("RGBA")
+                    image = Image.open(ICON_IMAGE_PATH).convert("RGBA")
                     image.thumbnail((72, 72), Image.Resampling.LANCZOS)
                     splash_photo = ImageTk.PhotoImage(image)
                 else:
                     splash_photo = tk.PhotoImage(
-                        file=str(HEADER_LOGO_PATH.resolve())
+                        file=str(ICON_IMAGE_PATH.resolve())
                     )
 
                 splash_refs["logo"] = splash_photo
@@ -1649,7 +1669,7 @@ def launch_gui():
             if HEADER_LOGO_PATH.is_file():
                 if pillow_available:
                     image = Image.open(HEADER_LOGO_PATH).convert("RGBA")
-                    image.thumbnail((56, 56), Image.Resampling.LANCZOS)
+                    image.thumbnail((96, 96), Image.Resampling.LANCZOS)
                     header_photo = ImageTk.PhotoImage(image)
                 else:
                     header_photo = tk.PhotoImage(file=str(HEADER_LOGO_PATH.resolve()))
@@ -2761,10 +2781,28 @@ def launch_gui():
             f"Recovered {interrupted_build_count} interrupted build record(s)"
         )
 
+    status_title_row = ttk.Frame(status_left)
+    status_title_row.pack(anchor="w", fill="x")
+
+    spinner_state = {
+        "job": None,
+        "frame": 0,
+        "active": False,
+    }
+    spinner_frames = ("◐", "◓", "◑", "◒")
+
+    spinner_label = ttk.Label(
+        status_title_row,
+        text="",
+        width=2,
+        anchor="center",
+    )
+    spinner_label.pack(side="left", padx=(0, 4))
+
     ttk.Label(
-        status_left,
+        status_title_row,
         textvariable=status_var,
-    ).pack(anchor="w")
+    ).pack(side="left")
 
     timing_var = tk.StringVar(value="Elapsed: —    Estimate: —")
     ttk.Label(
@@ -2778,6 +2816,162 @@ def launch_gui():
         length=180,
     )
     progress.pack(side="right")
+
+    def animate_busy_spinner() -> None:
+        """Advance the small dependency-free Tk spinner."""
+        if not spinner_state["active"]:
+            spinner_label.configure(text="")
+            spinner_state["job"] = None
+            return
+
+        index = spinner_state["frame"] % len(spinner_frames)
+        spinner_label.configure(text=spinner_frames[index])
+        spinner_state["frame"] += 1
+        spinner_state["job"] = root.after(110, animate_busy_spinner)
+
+    def set_busy_indicator(active: bool) -> None:
+        """Start or stop the Tk spinner and indeterminate progress bar."""
+        active = bool(active)
+
+        if active == spinner_state["active"]:
+            return
+
+        spinner_state["active"] = active
+
+        if active:
+            progress.start(10)
+            spinner_state["frame"] = 0
+            animate_busy_spinner()
+        else:
+            progress.stop()
+
+            if spinner_state["job"] is not None:
+                try:
+                    root.after_cancel(spinner_state["job"])
+                except tk.TclError:
+                    pass
+
+            spinner_state["job"] = None
+            spinner_label.configure(text="")
+
+    pipeline_frame = ttk.LabelFrame(
+        output_frame,
+        text="Build pipeline",
+        padding=(8, 6),
+    )
+    pipeline_frame.pack(fill="x", pady=(0, 8))
+
+    pipeline_definitions = [
+        ("validate", "Validate configuration"),
+        ("build_full", "Build Full Game"),
+        ("build_mod", "Build My Mod / DLC"),
+        ("copy_files", "Copy Workshop files"),
+        ("upload", "Upload to Steam Workshop"),
+    ]
+
+    pipeline_status_vars = {}
+    pipeline_labels = {}
+    pipeline_state = {
+        "enabled": set(),
+        "active": None,
+    }
+
+    for pipeline_row, (stage_key, stage_title) in enumerate(pipeline_definitions):
+        stage_var = tk.StringVar(value=f"○  {stage_title}")
+        stage_label = ttk.Label(
+            pipeline_frame,
+            textvariable=stage_var,
+            anchor="w",
+        )
+        stage_label.grid(
+            row=pipeline_row,
+            column=0,
+            sticky="w",
+            pady=1,
+        )
+        pipeline_status_vars[stage_key] = stage_var
+        pipeline_labels[stage_key] = stage_label
+
+    pipeline_frame.columnconfigure(0, weight=1)
+
+    def pipeline_stage_title(stage_key: str) -> str:
+        for key, title in pipeline_definitions:
+            if key == stage_key:
+                return title
+        return stage_key.replace("_", " ").title()
+
+    def set_pipeline_stage(stage_key: str, state: str) -> None:
+        """Update one build-pipeline row without relying on external assets."""
+        if stage_key not in pipeline_status_vars:
+            return
+
+        symbols = {
+            "pending": "○",
+            "active": "⏳",
+            "complete": "✓",
+            "skipped": "—",
+            "failed": "✗",
+            "cancelled": "■",
+        }
+        symbol = symbols.get(state, "○")
+        title = pipeline_stage_title(stage_key)
+        pipeline_status_vars[stage_key].set(f"{symbol}  {title}")
+
+        if state == "active":
+            pipeline_state["active"] = stage_key
+        elif pipeline_state.get("active") == stage_key:
+            pipeline_state["active"] = None
+
+    def configure_build_pipeline() -> None:
+        """Prepare pipeline rows from the currently selected build options."""
+        enabled = {"validate", "copy_files"}
+
+        if not flags["copy_only"].get():
+            if flags["build_full"].get():
+                enabled.add("build_full")
+            if flags["build_mod"].get():
+                enabled.add("build_mod")
+
+        if flags["upload"].get():
+            enabled.add("upload")
+
+        pipeline_state["enabled"] = enabled
+        pipeline_state["active"] = None
+
+        for stage_key, _stage_title in pipeline_definitions:
+            set_pipeline_stage(
+                stage_key,
+                "pending" if stage_key in enabled else "skipped",
+            )
+
+    def activate_pipeline_stage(stage_key: str) -> None:
+        """Complete the previous active stage and activate the next stage."""
+        previous = pipeline_state.get("active")
+
+        if previous and previous != stage_key:
+            set_pipeline_stage(previous, "complete")
+
+        if stage_key in pipeline_state.get("enabled", set()):
+            set_pipeline_stage(stage_key, "active")
+
+    def finish_pipeline_successfully() -> None:
+        """Mark every enabled pipeline stage as completed."""
+        for stage_key, _stage_title in pipeline_definitions:
+            if stage_key in pipeline_state.get("enabled", set()):
+                set_pipeline_stage(stage_key, "complete")
+
+        pipeline_state["active"] = None
+
+    def finish_pipeline_with_state(state: str) -> None:
+        """Mark the current stage as failed or cancelled."""
+        active_stage = pipeline_state.get("active")
+
+        if active_stage:
+            set_pipeline_stage(active_stage, state)
+
+        pipeline_state["active"] = None
+
+    configure_build_pipeline()
 
     output_box = scrolledtext.ScrolledText(
         output_frame,
@@ -4370,6 +4564,9 @@ def launch_gui():
 
         save_settings()
 
+        configure_build_pipeline()
+        set_pipeline_stage("validate", "complete")
+
         output_box.configure(state="normal")
         output_box.delete("1.0", "end")
         output_box.configure(state="disabled")
@@ -4400,6 +4597,7 @@ def launch_gui():
 
         except Exception as exc:
             error_text = str(exc)
+            finish_pipeline_with_state("failed")
 
             finish_build_record(
                 status="launch_error",
@@ -4432,7 +4630,15 @@ def launch_gui():
         build_button.configure(state="disabled")
         validate_button.configure(state="disabled")
         cancel_button.configure(state="normal")
-        progress.start(10)
+        set_busy_indicator(True)
+
+        if "build_full" in pipeline_state["enabled"]:
+            activate_pipeline_stage("build_full")
+        elif "build_mod" in pipeline_state["enabled"]:
+            activate_pipeline_stage("build_mod")
+        else:
+            activate_pipeline_stage("copy_files")
+
         status_var.set("Building…")
         update_build_timing_display()
 
@@ -4497,9 +4703,27 @@ def launch_gui():
             while True:
                 kind, value = messages.get_nowait()
                 if kind == "log":
-                    log(value)
+                    marker_match = re.fullmatch(
+                        r"=== PIPELINE:([A-Z_]+) ===\s*",
+                        str(value),
+                    )
+
+                    if marker_match:
+                        marker_to_stage = {
+                            "BUILD_FULL": "build_full",
+                            "BUILD_MOD": "build_mod",
+                            "COPY_FILES": "copy_files",
+                            "UPLOAD": "upload",
+                        }
+                        stage_key = marker_to_stage.get(marker_match.group(1))
+
+                        if stage_key:
+                            activate_pipeline_stage(stage_key)
+                    else:
+                        log(value)
+
                 elif kind == "done":
-                    progress.stop()
+                    set_busy_indicator(False)
                     build_button.configure(state="normal")
                     validate_button.configure(state="normal")
                     cancel_button.configure(state="disabled")
@@ -4515,6 +4739,7 @@ def launch_gui():
                     log_path = build_state.get("log_path")
 
                     if was_cancelled:
+                        finish_pipeline_with_state("cancelled")
                         finish_build_record(
                             status="cancelled",
                             exit_code=value,
@@ -4528,11 +4753,12 @@ def launch_gui():
                         )
 
                         messagebox.showwarning(
-                            "Meccha builder",
+                            "Meccha Builder",
                             "The build was cancelled.\n\n" f"Log saved to:\n{log_path}",
                         )
 
                     elif value == 0:
+                        finish_pipeline_successfully()
                         finish_build_record(
                             status="success",
                             exit_code=value,
@@ -4555,7 +4781,7 @@ def launch_gui():
                         )
 
                         messagebox.showinfo(
-                            "Meccha builder",
+                            "Meccha Builder",
                             "Build completed successfully.\n\n"
                             f"Duration: {format_duration(final_duration)}\n"
                             f"{workshop_result}"
@@ -4563,6 +4789,7 @@ def launch_gui():
                         )
 
                     else:
+                        finish_pipeline_with_state("failed")
                         finish_build_record(
                             status="failed",
                             exit_code=value,
@@ -4577,7 +4804,7 @@ def launch_gui():
                         )
 
                         messagebox.showerror(
-                            "Meccha builder",
+                            "Meccha Builder",
                             f"Build failed with exit code {value}.\n"
                             "Review the log.\n\n"
                             f"Duration: {format_duration(final_duration)}\n"
@@ -4587,7 +4814,7 @@ def launch_gui():
                     reset_active_build_state()
 
                 elif kind == "error":
-                    progress.stop()
+                    set_busy_indicator(False)
                     build_button.configure(state="normal")
                     validate_button.configure(state="normal")
                     cancel_button.configure(state="disabled")
@@ -4599,6 +4826,7 @@ def launch_gui():
 
                     error_text = str(value)
                     log_path = build_state.get("log_path")
+                    finish_pipeline_with_state("failed")
 
                     finish_build_record(
                         status="failed",
@@ -4614,7 +4842,7 @@ def launch_gui():
                     )
 
                     messagebox.showerror(
-                        "Meccha builder",
+                        "Meccha Builder",
                         f"{error_text}\n\n"
                         f"Duration: {format_duration(final_duration)}\n"
                         f"Log saved to:\n{log_path}",
@@ -4626,8 +4854,99 @@ def launch_gui():
             pass
         root.after(100, poll_queue)
 
+    def create_cursor_from_png(
+        png_path: Path,
+        cursor_path: Path,
+        hotspot_x: int = 0,
+        hotspot_y: int = 0,
+    ) -> Path | None:
+        """
+        Wrap a PNG inside a Windows CUR container using only Python's standard
+        library. Modern Windows accepts PNG-compressed cursor images.
+        """
+        if os.name != "nt" or not png_path.is_file():
+            return None
+
+        try:
+            png_data = png_path.read_bytes()
+
+            if not png_data.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError("Cursor source is not a valid PNG.")
+
+            if len(png_data) < 24:
+                raise ValueError("Cursor PNG is incomplete.")
+
+            width = int.from_bytes(png_data[16:20], "big")
+            height = int.from_bytes(png_data[20:24], "big")
+
+            if not (1 <= width <= 256 and 1 <= height <= 256):
+                raise ValueError(
+                    "Cursor PNG dimensions must be between 1 and 256 pixels."
+                )
+
+            hotspot_x = max(0, min(int(hotspot_x), width - 1))
+            hotspot_y = max(0, min(int(hotspot_y), height - 1))
+
+            width_byte = 0 if width == 256 else width
+            height_byte = 0 if height == 256 else height
+
+            header = (
+                (0).to_bytes(2, "little")
+                + (2).to_bytes(2, "little")
+                + (1).to_bytes(2, "little")
+            )
+            entry = (
+                bytes((width_byte, height_byte, 0, 0))
+                + hotspot_x.to_bytes(2, "little")
+                + hotspot_y.to_bytes(2, "little")
+                + len(png_data).to_bytes(4, "little")
+                + (22).to_bytes(4, "little")
+            )
+
+            cursor_path.parent.mkdir(parents=True, exist_ok=True)
+            cursor_path.write_bytes(header + entry + png_data)
+            return cursor_path
+        except (OSError, ValueError) as exc:
+            print(f"Could not create custom cursor: {exc}")
+            return None
+
+    custom_cursor_path = None
+
+    if CURSOR_FILE_PATH.is_file():
+        custom_cursor_path = CURSOR_FILE_PATH
+    elif CURSOR_SOURCE_PATH.is_file():
+        custom_cursor_path = create_cursor_from_png(
+            CURSOR_SOURCE_PATH,
+            GENERATED_CURSOR_PATH,
+            hotspot_x=0,
+            hotspot_y=0,
+        )
+
+    custom_cursor_name = (
+        f"@{custom_cursor_path.resolve()}"
+        if custom_cursor_path is not None and custom_cursor_path.is_file()
+        else None
+    )
+
+    if custom_cursor_name:
+        try:
+            root.configure(cursor=custom_cursor_name)
+        except tk.TclError as exc:
+            #print(f"Could not apply root custom cursor: {exc}")
+            custom_cursor_name = None
+
+    if CURSOR_SOURCE_PATH.is_file() and custom_cursor_name is None:
+        print(
+            "The Meccha cursor could not be enabled. Falling back to hand2."
+        )
+
     def apply_interactive_cursors(widget) -> None:
-        """Apply consistent mouse cursors to interactive widgets recursively."""
+        """
+        Apply the Meccha cursor to clickable widgets.
+
+        Text-editing and resize behavior retain their native cursors. When the
+        packaged cursor.cur is absent or unsupported, hand2 is used safely.
+        """
         try:
             widget_class = widget.winfo_class()
 
@@ -4637,7 +4956,13 @@ def launch_gui():
                 "TRadiobutton",
                 "TCombobox",
             }:
-                widget.configure(cursor="hand2")
+                cursor_name = custom_cursor_name or "hand2"
+
+                try:
+                    widget.configure(cursor=cursor_name)
+                except tk.TclError:
+                    widget.configure(cursor="hand2")
+
             elif widget_class in {"TEntry", "Text"}:
                 widget.configure(cursor="xterm")
         except (tk.TclError, TypeError):
@@ -5483,7 +5808,7 @@ def launch_gui():
 
     # Exact GitHub icon sizing
     github_source = Image.open(GIT_LOGO_PATH).convert("RGBA")
-    github_source.thumbnail((18, 18), Image.Resampling.LANCZOS)
+    github_source.thumbnail((25, 25), Image.Resampling.LANCZOS)
     github_footer_image = ImageTk.PhotoImage(github_source)
 
     github_footer_label = ttk.Label(
