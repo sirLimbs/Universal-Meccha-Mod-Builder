@@ -10,7 +10,10 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-MECCHA_APP_ID = "4704690" #DO NOT CHANGE
+APP_NAME = "Meccha Mod Builder"
+APP_VERSION = "1.2.0-dev"
+
+MECCHA_APP_ID = "4704690"  # DO NOT CHANGE
 
 def user_data_dir() -> Path:
     """
@@ -30,9 +33,72 @@ def user_data_dir() -> Path:
 
 
 USER_DATA_DIR = user_data_dir()
+
 SETTINGS_FILE = USER_DATA_DIR / "build_meccha_mod_gui_settings_v3.json"
 PROFILES_DIR = USER_DATA_DIR / "build_profiles"
+
+BUILD_HISTORY_DIR = USER_DATA_DIR / "build_history"
+BUILD_LOGS_DIR = BUILD_HISTORY_DIR / "logs"
+BUILD_HISTORY_FILE = BUILD_HISTORY_DIR / "history.json"
+
+CACHE_DIR = USER_DATA_DIR / "cache"
+RECENT_PROJECTS_FILE = CACHE_DIR / "recent_projects.json"
+BUILD_STATISTICS_FILE = CACHE_DIR / "build_statistics.json"
+UPDATE_SETTINGS_FILE = CACHE_DIR / "update_settings.json"
+
+PREVIEWS_DIR = USER_DATA_DIR / "previews"
+
 GUI_SETTINGS_VERSION = 3
+
+def ensure_user_data_directories():
+    """Create all persistent application directories if they do not exist."""
+    directories = [
+        USER_DATA_DIR,
+        PROFILES_DIR,
+        BUILD_HISTORY_DIR,
+        BUILD_LOGS_DIR,
+        CACHE_DIR,
+        PREVIEWS_DIR,
+    ]
+
+    for directory in directories:
+        directory.mkdir(parents=True, exist_ok=True)
+
+
+ensure_user_data_directories()
+
+def load_json_file(path: Path, default):
+    """
+    Safely load JSON data.
+
+    Returns the supplied default value when the file is missing, unreadable,
+    or contains invalid JSON.
+    """
+    try:
+        if not path.exists():
+            return default
+
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Could not load JSON file '{path}': {exc}")
+        return default
+
+
+def save_json_file(path: Path, data):
+    """
+    Safely save JSON data using a temporary file before replacing the original.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    temporary_path = path.with_name(f"{path.name}.tmp")
+
+    temporary_path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    temporary_path.replace(path)
+
 
 def resource_path(*parts: str) -> Path:
     """
@@ -500,7 +566,7 @@ def launch_gui():
         pass
 
     root = tk.Tk()
-    root.title("Universal Meccha Mod Builder")
+    root.title(f"Universal Meccha Mod Builder v{APP_VERSION}")
 
     def apply_window_icon():
         try:
@@ -589,18 +655,21 @@ def launch_gui():
         "theme": "Switch between Dark and Light appearance.",
     }
 
-    # New v2 settings file intentionally avoids loading old saved plugin selections.
-    try:
-        if SETTINGS_FILE.exists():
-            saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-            for key, value in saved.get("fields", {}).items():
-                if key in fields:
-                    fields[key].set(value)
-            for key, value in saved.get("flags", {}).items():
-                if key in flags:
-                    flags[key].set(bool(value))
-    except Exception:
-        pass
+    saved = load_json_file(
+        SETTINGS_FILE,
+        {
+            "fields": {},
+            "flags": {},
+        },
+    )
+
+    for key, value in saved.get("fields", {}).items():
+        if key in fields:
+            fields[key].set(value)
+
+    for key, value in saved.get("flags", {}).items():
+        if key in flags:
+            flags[key].set(bool(value))
 
     brand_image_ref = {"logo": None, "icon": None}
 
@@ -1023,7 +1092,7 @@ def launch_gui():
             messagebox.showerror("Profile", "Profile name is invalid.")
             return
         path = PROFILES_DIR / f"{safe}.json"
-        path.write_text(json.dumps(profile_payload(), indent=2), encoding="utf-8")
+        save_json_file(path, profile_payload())
         refresh_profiles()
         profile_var.set(safe)
         status_var.set(f"Saved profile: {safe}")
@@ -1034,7 +1103,13 @@ def launch_gui():
             messagebox.showwarning("Profiles", "Select a profile first.")
             return
         path = PROFILES_DIR / f"{name}.json"
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = load_json_file(
+            path,
+            {
+                "fields": {},
+                "flags": {},
+            },
+        )
         for key, value in data.get("fields", {}).items():
             if key in fields:
                 fields[key].set(value)
@@ -1072,9 +1147,9 @@ def launch_gui():
     ToolTip(open_profiles_button, hints["profiles"])
 
     def save_settings():
-        SETTINGS_FILE.write_text(
-            json.dumps(profile_payload(), indent=2),
-            encoding="utf-8",
+        save_json_file(
+            SETTINGS_FILE,
+            profile_payload(),
         )
 
     def validate_gui():
