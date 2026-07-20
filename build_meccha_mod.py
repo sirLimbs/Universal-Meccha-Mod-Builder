@@ -26,6 +26,13 @@ APP_VERSION = "1.2.0-dev"
 
 MECCHA_APP_ID = "4704690"  # DO NOT CHANGE
 
+GITHUB_REPOSITORY_URL = "https://github.com/sirLimbs/Universal-Meccha-Mod-Builder"
+LICENSE_NAME = "N/A"
+MECCHA_DISCLAIMER = (
+    "This is an independent community tool and is not affiliated with or "
+    "endorsed by the developers or publishers of Meccha Chameleon."
+)
+
 
 def user_data_dir() -> Path:
     """
@@ -710,6 +717,7 @@ def resource_path(*parts: str) -> Path:
 
 WINDOW_ICON_PATH = resource_path("icon", "icon.ico")
 HEADER_LOGO_PATH = resource_path("icon", "icon.png")
+GIT_LOGO_PATH = resource_path("icon", "github_icon.png")
 
 APP_ICON_FILE = WINDOW_ICON_PATH
 APP_LOGO_FILE = HEADER_LOGO_PATH
@@ -1323,6 +1331,83 @@ def launch_gui():
 
     root = tk.Tk()
     root.title(f"Universal Meccha Mod Builder v{APP_VERSION}")
+    root.withdraw()
+
+    splash_refs = {"logo": None}
+
+    def show_startup_splash():
+        """
+        Show a lightweight splash while startup initialization continues.
+
+        The splash is time-limited and never waits before allowing the main
+        window to initialize.
+        """
+        splash = tk.Toplevel(root)
+        splash.title(APP_NAME)
+        splash.overrideredirect(True)
+        splash.attributes("-topmost", True)
+
+        splash_frame = ttk.Frame(splash, padding=(24, 18))
+        splash_frame.pack(fill="both", expand=True)
+
+        if HEADER_LOGO_PATH.is_file():
+            try:
+                if pillow_available:
+                    image = Image.open(HEADER_LOGO_PATH).convert("RGBA")
+                    image.thumbnail((72, 72), Image.Resampling.LANCZOS)
+                    splash_photo = ImageTk.PhotoImage(image)
+                else:
+                    splash_photo = tk.PhotoImage(
+                        file=str(HEADER_LOGO_PATH.resolve())
+                    )
+
+                splash_refs["logo"] = splash_photo
+                ttk.Label(
+                    splash_frame,
+                    image=splash_photo,
+                ).pack(side="left", padx=(0, 16))
+            except Exception as exc:
+                print(f"Could not load splash logo: {exc}")
+
+        splash_text = ttk.Frame(splash_frame)
+        splash_text.pack(side="left", fill="both", expand=True)
+
+        ttk.Label(
+            splash_text,
+            text="Meccha Mod Builder",
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            splash_text,
+            text=f"v{APP_VERSION}",
+        ).pack(anchor="w", pady=(2, 6))
+        ttk.Label(
+            splash_text,
+            text="Loading profiles and project tools...",
+        ).pack(anchor="w")
+
+        splash.update_idletasks()
+
+        width = splash.winfo_reqwidth()
+        height = splash.winfo_reqheight()
+        screen_width = splash.winfo_screenwidth()
+        screen_height = splash.winfo_screenheight()
+        x = max(0, (screen_width - width) // 2)
+        y = max(0, (screen_height - height) // 2)
+        splash.geometry(f"{width}x{height}+{x}+{y}")
+        splash.update()
+
+        def close_splash():
+            if splash.winfo_exists():
+                splash.destroy()
+            root.deiconify()
+            root.lift()
+            root.focus_force()
+
+        root.after(700, close_splash)
+        return splash
+
+    startup_splash = show_startup_splash()
 
     interrupted_build_count = mark_interrupted_builds()
     rebuild_build_statistics()
@@ -1576,8 +1661,11 @@ def launch_gui():
         except Exception as exc:
             print(f"Could not apply header logo: {exc}")
 
-    # The action bar is packed first at the bottom, so Build/Cancel stay visible
-    # at every supported window size.
+    # The footer is packed first so it stays at the absolute bottom.
+    footer_host = ttk.Frame(root, padding=(10, 4))
+    footer_host.pack(side="bottom", fill="x")
+
+    # The action bar remains directly above the footer at all window sizes.
     action_host = ttk.Frame(root, padding=(10, 6))
     action_host.pack(side="bottom", fill="x")
 
@@ -4736,10 +4824,23 @@ def launch_gui():
             parent=root,
         )
 
+    def open_github_repository():
+        """Open the configured GitHub repository or explain what is missing."""
+        if not GITHUB_REPOSITORY_URL:
+            messagebox.showinfo(
+                "GitHub Repository",
+                "No GitHub repository URL has been configured yet.",
+                parent=root,
+            )
+            return
+
+        webbrowser.open(GITHUB_REPOSITORY_URL)
+
     def show_about():
         about = tk.Toplevel(root)
         about.title(f"About {APP_NAME}")
-        about.resizable(False, False)
+        about.geometry("540x430")
+        about.minsize(500, 390)
         about.transient(root)
         about.grab_set()
         apply_window_icon(about, remember_key="about")
@@ -4747,57 +4848,139 @@ def launch_gui():
         container = ttk.Frame(about, padding=18)
         container.pack(fill="both", expand=True)
 
+        heading = ttk.Frame(container)
+        heading.pack(fill="x")
+
+        if HEADER_LOGO_PATH.is_file():
+            try:
+                if pillow_available:
+                    image = Image.open(HEADER_LOGO_PATH).convert("RGBA")
+                    image.thumbnail((64, 64), Image.Resampling.LANCZOS)
+                    about_photo = ImageTk.PhotoImage(image)
+                else:
+                    about_photo = tk.PhotoImage(
+                        file=str(HEADER_LOGO_PATH.resolve())
+                    )
+
+                about._logo_reference = about_photo
+                ttk.Label(
+                    heading,
+                    image=about_photo,
+                ).pack(side="left", padx=(0, 14))
+            except Exception as exc:
+                print(f"Could not load About logo: {exc}")
+
+        heading_text = ttk.Frame(heading)
+        heading_text.pack(side="left", fill="x", expand=True)
+
         ttk.Label(
-            container,
+            heading_text,
             text="Universal Meccha Mod Builder",
             font=("Segoe UI", 16, "bold"),
         ).pack(anchor="w")
         ttk.Label(
-            container,
+            heading_text,
             text=f"Version {APP_VERSION}",
         ).pack(anchor="w", pady=(2, 0))
         ttk.Label(
-            container,
+            heading_text,
             text="Created by Limbs",
             font=("Segoe UI", 9, "italic"),
-        ).pack(anchor="w", pady=(2, 12))
+        ).pack(anchor="w", pady=(2, 0))
+
+        ttk.Separator(container).pack(fill="x", pady=14)
+
+        details = ttk.Frame(container)
+        details.pack(fill="both", expand=True)
+        details.columnconfigure(1, weight=1)
+
+        ttk.Label(details, text="Application").grid(
+            row=0, column=0, sticky="nw", padx=(0, 14), pady=4
+        )
         ttk.Label(
-            container,
-            text=(
-                "Build, package, validate, and publish custom Meccha "
-                "Chameleon maps."
-            ),
-            wraplength=430,
+            details,
+            text="Build, package, validate, and publish custom Meccha Chameleon maps.",
+            wraplength=350,
             justify="left",
-        ).pack(anchor="w")
+        ).grid(row=0, column=1, sticky="nw", pady=4)
+
+        ttk.Label(details, text="Author").grid(
+            row=1, column=0, sticky="nw", padx=(0, 14), pady=4
+        )
+        ttk.Label(details, text="Limbs").grid(
+            row=1, column=1, sticky="nw", pady=4
+        )
+
+        ttk.Label(details, text="License").grid(
+            row=2, column=0, sticky="nw", padx=(0, 14), pady=4
+        )
         ttk.Label(
-            container,
-            text=(
-                "This is an independent community tool and is not affiliated "
-                "with or endorsed by the developers or publishers of Meccha "
-                "Chameleon."
-            ),
-            wraplength=430,
+            details,
+            text=LICENSE_NAME,
+            wraplength=350,
             justify="left",
-        ).pack(anchor="w", pady=(10, 14))
+        ).grid(row=2, column=1, sticky="nw", pady=4)
+
+        ttk.Label(details, text="GitHub").grid(
+            row=3, column=0, sticky="nw", padx=(0, 14), pady=4
+        )
+        github_text = GITHUB_REPOSITORY_URL or "Repository URL not configured"
+        github_label = ttk.Label(
+            details,
+            text=github_text,
+            cursor="hand2" if GITHUB_REPOSITORY_URL else "",
+            wraplength=350,
+            justify="left",
+        )
+        github_label.grid(row=3, column=1, sticky="nw", pady=4)
+
+        if GITHUB_REPOSITORY_URL:
+            github_label.bind(
+                "<Button-1>",
+                lambda _event: open_github_repository(),
+            )
+
+        ttk.Label(details, text="Disclaimer").grid(
+            row=4, column=0, sticky="nw", padx=(0, 14), pady=4
+        )
+        ttk.Label(
+            details,
+            text=MECCHA_DISCLAIMER,
+            wraplength=350,
+            justify="left",
+        ).grid(row=4, column=1, sticky="nw", pady=4)
 
         button_row = ttk.Frame(container)
-        button_row.pack(fill="x")
+        button_row.pack(fill="x", pady=(14, 0))
+
+        github_button = ttk.Button(
+            button_row,
+            text="Open GitHub",
+            command=open_github_repository,
+            state="normal" if GITHUB_REPOSITORY_URL else "disabled",
+            cursor="hand2",
+        )
+        github_button.pack(side="left")
 
         ttk.Button(
             button_row,
             text="Open AppData",
             command=lambda: open_path_in_windows(USER_DATA_DIR),
-        ).pack(side="left")
+            cursor="hand2",
+        ).pack(side="left", padx=(8, 0))
+
         ttk.Button(
             button_row,
             text="Copy System Info",
             command=copy_debug_information,
+            cursor="hand2",
         ).pack(side="left", padx=(8, 0))
+
         ttk.Button(
             button_row,
             text="Close",
             command=about.destroy,
+            cursor="hand2",
         ).pack(side="right")
 
         about.bind("<Escape>", lambda _event: about.destroy())
@@ -5271,6 +5454,61 @@ def launch_gui():
     menu_bar.add_cascade(label="Help", menu=help_menu)
 
     root.configure(menu=menu_bar)
+
+    # ------------------------------------------------------------------
+    # Persistent application footer
+    # ------------------------------------------------------------------
+    footer_left = ttk.Frame(footer_host)
+    footer_left.pack(side="left", fill="x", expand=True)
+
+    ttk.Label(
+        footer_left,
+        text=f"Meccha Mod Builder v{APP_VERSION}",
+    ).pack(side="left")
+
+    ttk.Label(
+        footer_left,
+        text="Created by Limbs",
+        font=("Segoe UI", 9, "italic"),
+    ).pack(side="left", padx=(12, 0))
+
+    # Keep this reference somewhere persistent, such as near your other UI images.
+    github_source = Image.open(GIT_LOGO_PATH).convert("RGBA")
+    github_source.thumbnail((18, 18), Image.Resampling.LANCZOS)
+
+    github_footer_image = ImageTk.PhotoImage(github_source)
+
+    footer_right = ttk.Frame(footer_host)
+    footer_right.pack(side="right")
+
+    # Exact GitHub icon sizing
+    github_source = Image.open(GIT_LOGO_PATH).convert("RGBA")
+    github_source.thumbnail((18, 18), Image.Resampling.LANCZOS)
+    github_footer_image = ImageTk.PhotoImage(github_source)
+
+    github_footer_label = ttk.Label(
+        footer_right,
+        image=github_footer_image,
+        cursor="hand2",
+    )
+
+    github_footer_label.pack(side="left", padx=(0, 10))
+
+    if GITHUB_REPOSITORY_URL:
+        github_footer_label.bind(
+            "<Button-1>",
+            lambda event: open_github_repository(),
+        )
+
+    ToolTip(
+        github_footer_label,
+        (
+            "Open the GitHub repository."
+            if GITHUB_REPOSITORY_URL
+            else "GitHub repository link is unavailable."
+        ),
+    )
+
 
     def handle_build_shortcut(_event=None):
         invoke_button_if_enabled(build_button)
