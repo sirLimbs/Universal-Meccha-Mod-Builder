@@ -24,7 +24,7 @@ from pathlib import Path
 # =============================================================================
 
 APP_NAME = "Meccha Mod Builder"
-APP_VERSION = "1.2.0-dev"
+APP_VERSION = "1.2.0"
 
 MECCHA_APP_ID = "4704690"  # DO NOT CHANGE
 
@@ -719,8 +719,26 @@ def resource_path(*parts: str) -> Path:
 
 RESOURCES_DIR = resource_path("resources")
 ICON_DIR = RESOURCES_DIR / "icon"
+BUTTON_ICON_DIR = ICON_DIR / "buttons"
 CURSOR_DIR = RESOURCES_DIR / "cursor"
 SPINNER_DIR = RESOURCES_DIR / "spinner"
+
+BUTTON_ICON_PATHS = {
+    "check": BUTTON_ICON_DIR / "check.png",
+    "copy": BUTTON_ICON_DIR / "copy.png",
+    "delete": BUTTON_ICON_DIR / "delete.png",
+    "details": BUTTON_ICON_DIR / "details.png",
+    "exit": BUTTON_ICON_DIR / "exit.png",
+    "folder": BUTTON_ICON_DIR / "folder.png",
+    "glass": BUTTON_ICON_DIR / "glass.png",
+    "history": BUTTON_ICON_DIR / "history.png",
+    "info": BUTTON_ICON_DIR / "info.png",
+    "link": BUTTON_ICON_DIR / "link.png",
+    "load": BUTTON_ICON_DIR / "load.png",
+    "refresh": BUTTON_ICON_DIR / "refresh.png",
+    "save": BUTTON_ICON_DIR / "save.png",
+    "workshop": BUTTON_ICON_DIR / "steamwm.png",
+}
 
 WINDOW_ICON_PATH = ICON_DIR / "icon.ico"
 HEADER_LOGO_PATH = ICON_DIR / "header_icon.png"
@@ -1745,6 +1763,98 @@ def launch_gui():
     except tk.TclError:
         pass
 
+    style.configure(
+        "Icon.TButton",
+        padding=0,
+        borderwidth=0,
+        relief="flat",
+        focusthickness=0,
+        highlightthickness=0,
+    )
+    style.map(
+        "Icon.TButton",
+        relief=[("pressed", "flat"), ("active", "flat")],
+        borderwidth=[("pressed", 0), ("active", 0)],
+    )
+
+    button_icon_refs = {}
+
+    def load_button_icon(name: str, size: int = 24):
+        """
+        Load and resize a button icon while retaining a permanent Tk reference.
+
+        Pillow is preferred for smooth resizing. Tk's built-in subsample is used
+        as a dependency-free fallback.
+        """
+        cache_key = (name, size)
+
+        if cache_key in button_icon_refs:
+            return button_icon_refs[cache_key]
+
+        path = BUTTON_ICON_PATHS.get(name)
+
+        if path is None or not path.is_file():
+            print(f"Button icon does not exist: {path}")
+            button_icon_refs[cache_key] = None
+            return None
+
+        try:
+            if pillow_available:
+                image = Image.open(path).convert("RGBA")
+                image.thumbnail((size, size), Image.Resampling.LANCZOS)
+
+                # Center icons with non-square source artwork.
+                canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+                x = (size - image.width) // 2
+                y = (size - image.height) // 2
+                canvas.alpha_composite(image, (x, y))
+                photo = ImageTk.PhotoImage(canvas)
+            else:
+                source_photo = tk.PhotoImage(file=str(path.resolve()))
+                divisor = max(
+                    1,
+                    int(
+                        max(
+                            source_photo.width() / size,
+                            source_photo.height() / size,
+                        )
+                    ),
+                )
+                photo = source_photo.subsample(divisor, divisor)
+
+            button_icon_refs[cache_key] = photo
+            return photo
+        except Exception as exc:
+            print(f"Could not load button icon '{name}': {exc}")
+            button_icon_refs[cache_key] = None
+            return None
+
+    def make_icon_button(
+        parent,
+        icon_name: str,
+        tooltip: str,
+        command=None,
+        *,
+        size: int = 32,
+        **kwargs,
+    ):
+        """Create a consistently sized icon-only ttk button with a tooltip."""
+        image = load_button_icon(icon_name, size=size)
+
+        kwargs.setdefault("style", "Icon.TButton")
+        kwargs.setdefault("cursor", "hand2")
+
+        button = ttk.Button(
+            parent,
+            image=image if image is not None else "",
+            text="" if image is not None else tooltip,
+            command=command,
+            **kwargs,
+        )
+        button._meccha_icon_ref = image
+        ToolTip(button, tooltip)
+        return button
+
     locals_ref = {}
 
     fields = {
@@ -2214,30 +2324,22 @@ def launch_gui():
         controls.grid(row=current_row, column=2, padx=(8, 0), pady=4)
         widgets.append(controls)
 
-        browse_button = ttk.Button(
+        browse_button = make_icon_button(
             controls,
-            text="🔍",
-            width=3,
+            "glass",
+            browse_tooltip or hints.get(key, "") or "Browse or select a value.",
             command=browse if browse else None,
             state="normal" if browse else "disabled",
-            cursor="hand2",
         )
         browse_button.pack(side="left")
-        ToolTip(
-            browse_button,
-            browse_tooltip or hints.get(key, "") or "Browse or select a value.",
-        )
-
-        folder_button = ttk.Button(
+        folder_button = make_icon_button(
             controls,
-            text="📂",
-            width=3,
+            "folder",
+            "Open the resolved folder for this field.",
             command=lambda field_key=key: open_field_directory(field_key),
             state="disabled",
-            cursor="hand2",
         )
         folder_button.pack(side="left", padx=(4, 0))
-        ToolTip(folder_button, "Open the resolved folder for this field.")
 
         path_control_buttons[key] = {
             "browse": browse_button,
@@ -2321,22 +2423,20 @@ def launch_gui():
     plugin_controls = ttk.Frame(form)
     plugin_controls.grid(row=row, column=2, padx=(8, 0), pady=4)
 
-    refresh_button = ttk.Button(
+    refresh_button = make_icon_button(
         plugin_controls,
-        text="🔍",
-        width=3,
+        "refresh",
+        "Refresh and select from detected project plugins.",
         command=lambda: refresh_plugins(),
-        cursor="hand2",
     )
     refresh_button.pack(side="left")
 
-    plugin_folder_button = ttk.Button(
+    plugin_folder_button = make_icon_button(
         plugin_controls,
-        text="📂",
-        width=3,
+        "folder",
+        "Open the selected plugin folder.",
         command=lambda: open_field_directory("plugin"),
         state="disabled",
-        cursor="hand2",
     )
     plugin_folder_button.pack(side="left", padx=(4, 0))
 
@@ -2347,8 +2447,6 @@ def launch_gui():
 
     ToolTip(plugin_label, hints["plugin"])
     ToolTip(plugin_combo, f"{hints['plugin']}\n\nDouble-click to copy.")
-    ToolTip(refresh_button, "Refresh and select from detected project plugins.")
-    ToolTip(plugin_folder_button, "Open the selected plugin folder.")
     row += 1
 
     add_entry(
@@ -2585,11 +2683,11 @@ def launch_gui():
             )
             entry.grid(row=row_index, column=1, sticky="ew", pady=4)
             if browse_command:
-                ttk.Button(
+                make_icon_button(
                     details_content,
-                    text="Browse…",
+                    "glass",
+                    f"Browse for {label_text.lower()}.",
                     command=browse_command,
-                    cursor="hand2",
                 ).grid(row=row_index, column=2, padx=(8, 0), pady=4)
             return entry
 
@@ -2690,11 +2788,11 @@ def launch_gui():
         )
         steamcmd_entry = ttk.Entry(upload_frame, textvariable=steamcmd_var)
         steamcmd_entry.grid(row=1, column=1, sticky="ew", pady=4)
-        ttk.Button(
+        make_icon_button(
             upload_frame,
-            text="Browse…",
+            "glass",
+            "Browse for steamcmd.exe.",
             command=choose_steamcmd,
-            cursor="hand2",
         ).grid(row=1, column=2, padx=(8, 0), pady=4)
 
         ttk.Label(upload_frame, text="Login arguments").grid(
@@ -3152,11 +3250,11 @@ def launch_gui():
             preview_box.insert("1.0", preview_text_value)
             preview_box.configure(state="disabled")
 
-            ttk.Button(
+            make_icon_button(
                 preview_container,
-                text="Close",
+                "exit",
+                "Close VDF preview.",
                 command=preview_window.destroy,
-                cursor="hand2",
             ).pack(anchor="e", pady=(10, 0))
 
             preview_window.bind(
@@ -3239,41 +3337,41 @@ def launch_gui():
         button_frame = ttk.Frame(container)
         button_frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(12, 0))
 
-        ttk.Button(
+        make_icon_button(
             button_frame,
-            text="Refresh Readiness",
+            "refresh",
+            "Refresh Workshop readiness.",
             command=refresh_workshop_readiness,
-            cursor="hand2",
         ).pack(side="left")
 
-        ttk.Button(
+        make_icon_button(
             button_frame,
-            text="Open Folder",
+            "folder",
+            "Open the Workshop folder.",
             command=open_local_workshop_folder,
-            cursor="hand2",
         ).pack(side="left", padx=(8, 0))
 
-        open_page_button = ttk.Button(
+        open_page_button = make_icon_button(
             button_frame,
-            text="Open Page",
+            "workshop",
+            "Open the Steam Workshop page.",
             command=open_workshop_page,
-            cursor="hand2",
         )
         open_page_button.pack(side="left", padx=(8, 0))
 
-        copy_url_button = ttk.Button(
+        copy_url_button = make_icon_button(
             button_frame,
-            text="Copy URL",
+            "copy",
+            "Copy the Steam Workshop URL.",
             command=copy_workshop_url,
-            cursor="hand2",
         )
         copy_url_button.pack(side="left", padx=(8, 0))
 
-        ttk.Button(
+        make_icon_button(
             button_frame,
-            text="Preview VDF",
+            "details",
+            "Preview the generated Workshop VDF.",
             command=preview_vdf,
-            cursor="hand2",
         ).pack(side="left", padx=(8, 0))
 
         ttk.Button(
@@ -3283,12 +3381,11 @@ def launch_gui():
             cursor="hand2",
         ).pack(side="right")
 
-        ttk.Button(
+        make_icon_button(
             button_frame,
-            text="Save Settings",
+            "save",
+            "Save Workshop settings.",
             command=save_workshop_settings,
-            style="Primary.TButton",
-            cursor="hand2",
         ).pack(side="right", padx=(0, 8))
 
         action_refs["open_page_button"] = open_page_button
@@ -3341,17 +3438,14 @@ def launch_gui():
         workshop_manager_frame,
         textvariable=workshop_summary_var,
     ).grid(row=0, column=0, sticky="w")
-    workshop_manager_button = ttk.Button(
+    workshop_manager_button = make_icon_button(
         workshop_manager_frame,
-        text="Workshop Manager…",
+        "workshop",
+        "Configure Workshop metadata, visibility, item ID, and SteamCMD upload.",
         command=open_workshop_manager,
-        cursor="hand2",
+        size=64,
     )
     workshop_manager_button.grid(row=0, column=1, padx=(10, 0))
-    ToolTip(
-        workshop_manager_button,
-        "Configure Workshop metadata, visibility, item ID, and SteamCMD upload.",
-    )
     row += 1
 
     def update_steamcmd_visibility():
@@ -4107,36 +4201,35 @@ def launch_gui():
             (PROFILES_DIR / f"{name}.json").unlink(missing_ok=True)
             refresh_profiles()
 
-    ttk.Button(
+    make_icon_button(
         profile_bar,
-        text="Save",
+        "save",
+        "Save the current build profile.",
         command=save_profile,
-        cursor="hand2",
-    ).grid(row=1, column=1, padx=(0, 4), sticky="ew")
-    ttk.Button(
+    ).grid(row=1, column=1, padx=(0, 4))
+    make_icon_button(
         profile_bar,
-        text="Load",
+        "load",
+        "Load the selected build profile.",
         command=load_profile,
-        cursor="hand2",
-    ).grid(row=1, column=2, padx=4, sticky="ew")
-    ttk.Button(
+    ).grid(row=1, column=2, padx=4)
+    make_icon_button(
         profile_bar,
-        text="Delete",
+        "delete",
+        "Delete the selected build profile.",
         command=delete_profile,
-        cursor="hand2",
-    ).grid(row=1, column=3, padx=4, sticky="ew")
-    open_profiles_button = ttk.Button(
+    ).grid(row=1, column=3, padx=4)
+    open_profiles_button = make_icon_button(
         profile_bar,
-        text="Folder",
+        "folder",
+        hints["profiles"],
         command=lambda: os.startfile(PROFILES_DIR),
-        cursor="hand2",
     )
     open_profiles_button.grid(row=1, column=4, padx=(4, 0), sticky="ew")
 
     for column in range(4):
         profile_bar.columnconfigure(column, weight=1)
 
-    ToolTip(open_profiles_button, hints["profiles"])
 
     def save_settings():
         save_json_file(
@@ -5147,23 +5240,26 @@ def launch_gui():
         ).pack(side="right")
 
         if counts["error"] == 0 and counts["warning"] > 0:
-            ttk.Button(
+            make_icon_button(
                 button_frame,
-                text="Continue Anyway",
+                "check",
+                "Continue with the build despite warnings.",
                 command=approve,
             ).pack(side="right", padx=(0, 8))
 
         if counts["error"] == 0 and counts["warning"] == 0:
-            ttk.Button(
+            make_icon_button(
                 button_frame,
-                text="Start Build",
+                "check",
+                "Start the validated build.",
                 command=approve,
             ).pack(side="right", padx=(0, 8))
 
         if counts["error"] > 0:
-            ttk.Button(
+            make_icon_button(
                 button_frame,
-                text="Fix Errors and Recheck",
+                "refresh",
+                "Return to the form, fix errors, and validate again.",
                 command=cancel,
             ).pack(side="right", padx=(0, 8))
 
@@ -5616,16 +5712,18 @@ def launch_gui():
         button_row.pack(fill="x", pady=(12, 0))
 
         if log_path:
-            ttk.Button(
+            make_icon_button(
                 button_row,
-                text="Open Log",
+                "glass",
+                "Open the saved build log.",
                 command=lambda: open_path_in_windows(Path(log_path)),
                 cursor="hand2",
             ).pack(side="left")
 
-            ttk.Button(
+            make_icon_button(
                 button_row,
-                text="Open Log Folder",
+                "folder",
+                "Open the folder containing this build log.",
                 command=lambda: open_path_in_windows(Path(log_path).parent),
                 cursor="hand2",
             ).pack(side="left", padx=(8, 0))
@@ -5637,9 +5735,10 @@ def launch_gui():
         )
 
         if workshop_path is not None:
-            ttk.Button(
+            make_icon_button(
                 button_row,
-                text="Open Workshop Folder",
+                "folder",
+                "Open the Workshop staging folder.",
                 command=lambda: open_path_in_windows(workshop_path),
                 cursor="hand2",
             ).pack(side="left", padx=(8, 0))
@@ -5650,9 +5749,10 @@ def launch_gui():
                 + recovered_workshop_id
             )
 
-            ttk.Button(
+            make_icon_button(
                 button_row,
-                text="Open Workshop Page",
+                "workshop",
+                "Open the published Steam Workshop page.",
                 command=lambda: webbrowser.open(workshop_url),
                 cursor="hand2",
             ).pack(side="left", padx=(8, 0))
@@ -5678,16 +5778,18 @@ def launch_gui():
             root.update_idletasks()
             status_var.set("Build summary copied")
 
-        ttk.Button(
+        make_icon_button(
             button_row,
-            text="Copy Summary",
+            "copy",
+            "Copy this build summary.",
             command=copy_summary,
             cursor="hand2",
         ).pack(side="right", padx=(8, 0))
 
-        ttk.Button(
+        make_icon_button(
             button_row,
-            text="Close",
+            "exit",
+            "Close the build summary.",
             command=dialog.destroy,
             cursor="hand2",
         ).pack(side="right")
@@ -6221,14 +6323,17 @@ def launch_gui():
         button_row.pack(fill="x")
 
         if result.get("url"):
-            ttk.Button(
+            make_icon_button(
+                "link",
+                "Open the latest GitHub release.",
                 button_row,
-                text="Open Release",
                 command=lambda: webbrowser.open(result["url"]),
                 cursor="hand2",
             ).pack(side="left")
 
-        ttk.Button(
+        make_icon_button(
+                "link",
+                "Open the GitHub repository.",
             button_row,
             text="Open Repository",
             command=open_github_repository,
@@ -6241,16 +6346,18 @@ def launch_gui():
                 save_json_file(UPDATE_SETTINGS_FILE, update_settings)
                 dialog.destroy()
 
-            ttk.Button(
+            make_icon_button(
+                "exit",
+                "Skip automatic notifications for this version.",
                 button_row,
-                text="Skip This Version",
                 command=dismiss_this_version,
                 cursor="hand2",
             ).pack(side="right", padx=(0, 8))
 
-        ttk.Button(
+        make_icon_button(
+                "exit",
+                "Close the update window.",
             button_row,
-            text="Close",
             command=dialog.destroy,
             cursor="hand2",
         ).pack(side="right")
@@ -6445,11 +6552,11 @@ def launch_gui():
             save_json_file(UPDATE_SETTINGS_FILE, update_settings)
             dialog.destroy()
 
-        ttk.Button(
+        make_icon_button(
             button_row,
-            text="Check Now",
+            "refresh",
+            "Check GitHub for updates now.",
             command=lambda: check_for_updates(silent=False),
-            cursor="hand2",
         ).pack(side="left")
 
         ttk.Button(
@@ -6459,11 +6566,11 @@ def launch_gui():
             cursor="hand2",
         ).pack(side="right")
 
-        ttk.Button(
+        make_icon_button(
             button_row,
-            text="Save",
+            "save",
+            "Save update preferences.",
             command=save_preferences,
-            cursor="hand2",
         ).pack(side="right", padx=(0, 8))
 
     def open_github_repository():
@@ -6595,32 +6702,36 @@ def launch_gui():
         button_row = ttk.Frame(container)
         button_row.pack(fill="x", pady=(14, 0))
 
-        github_button = ttk.Button(
+        github_button = make_icon_button(
+            "link",
+            "Open the GitHub repository.",
             button_row,
-            text="Open GitHub",
             command=open_github_repository,
             state="normal" if GITHUB_REPOSITORY_URL else "disabled",
             cursor="hand2",
         )
         github_button.pack(side="left")
 
-        ttk.Button(
+        make_icon_button(
+            "folder",
+            "Open the application data folder.",
             button_row,
-            text="Open AppData",
             command=lambda: open_path_in_windows(USER_DATA_DIR),
             cursor="hand2",
         ).pack(side="left", padx=(8, 0))
 
-        ttk.Button(
+        make_icon_button(
+            "copy",
+            "Copy system and diagnostic information.",
             button_row,
-            text="Copy System Info",
             command=copy_debug_information,
             cursor="hand2",
         ).pack(side="left", padx=(8, 0))
 
-        ttk.Button(
+        make_icon_button(
+            "exit",
+            "Close the About window.",
             button_row,
-            text="Close",
             command=about.destroy,
             cursor="hand2",
         ).pack(side="right")
@@ -6850,31 +6961,37 @@ def launch_gui():
         )
         button_frame.pack(fill="x")
 
-        ttk.Button(
+        make_icon_button(
+            "refresh",
+            "Refresh build history.",
             button_frame,
-            text="Refresh",
             command=refresh_history_table,
         ).pack(side="left")
 
-        ttk.Button(
+        make_icon_button(
+            "details",
+            "Show details for the selected build.",
             button_frame,
-            text="Build Details",
             command=show_selected_details,
         ).pack(side="left", padx=(8, 0))
 
-        ttk.Button(
+        make_icon_button(
+            "glass",
+            "Open the selected build log.",
             button_frame,
-            text="Open Selected Log",
             command=open_selected_log,
         ).pack(side="left", padx=(8, 0))
 
-        ttk.Button(
+        make_icon_button(
+            "folder",
+            "Open the build logs folder.",
             button_frame,
-            text="Open Logs Folder",
             command=lambda: open_path_in_windows(BUILD_LOGS_DIR),
         ).pack(side="left", padx=(8, 0))
 
-        ttk.Button(
+        make_icon_button(
+            "exit",
+            "Close Build History.",
             button_frame,
             text="Close",
             command=history_window.destroy,
@@ -6925,23 +7042,23 @@ def launch_gui():
         cursor="hand2",
     )
     cancel_button.pack(side="left", padx=8)
-    ttk.Button(
+    make_icon_button(
         buttons,
-        text="Open Workshop Folder",
+        "folder",
+        "Open the Workshop staging folder.",
         command=open_workshop,
-        cursor="hand2",
     ).pack(side="left")
-    ttk.Button(
+    make_icon_button(
         buttons,
-        text="Build History",
+        "history",
+        "Open Build History.",
         command=show_build_history,
-        cursor="hand2",
     ).pack(side="left", padx=(8, 0))
-    ttk.Button(
+    make_icon_button(
         buttons,
-        text="Refresh Plugins",
+        "refresh",
+        "Refresh detected project plugins.",
         command=refresh_plugins,
-        cursor="hand2",
     ).pack(side="left", padx=8)
 
     # ------------------------------------------------------------------
