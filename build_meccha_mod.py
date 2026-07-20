@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import sys
 import threading
+import urllib.error
+import urllib.request
 import webbrowser
 import zipfile
 from datetime import datetime
@@ -1379,6 +1381,112 @@ def main_cli(argv=None):
 
     print("=== PIPELINE:DONE ===", flush=True)
     print("\n=== DONE ===")
+
+
+def normalize_version_tuple(version_text: str) -> tuple[int, ...]:
+    """
+    Convert versions such as v1.2.0, 1.2.0-dev, or 2.0-beta into a numeric tuple.
+
+    Pre-release labels are intentionally ignored for simple update comparison.
+    """
+    numbers = re.findall(r"\d+", str(version_text))
+
+    if not numbers:
+        return (0,)
+
+    return tuple(int(number) for number in numbers)
+
+
+def github_repository_slug(repository_url: str) -> str:
+    """Extract owner/repository from a normal GitHub repository URL."""
+    match = re.search(
+        r"github\.com/([^/\s]+)/([^/#?\s]+)",
+        repository_url,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return ""
+
+    owner = match.group(1)
+    repository = match.group(2)
+
+    if repository.lower().endswith(".git"):
+        repository = repository[:-4]
+
+    return f"{owner}/{repository}"
+
+
+def fetch_latest_github_release(repository_url: str, timeout: int = 10) -> dict:
+    """
+    Fetch the latest GitHub release using the public REST endpoint.
+
+    No external dependency or GitHub token is required for occasional checks.
+    """
+    slug = github_repository_slug(repository_url)
+
+    if not slug:
+        raise ValueError("The configured GitHub repository URL is invalid.")
+
+    api_url = f"https://api.github.com/repos/{slug}/releases/latest"
+    request = urllib.request.Request(
+        api_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"{APP_NAME.replace(' ', '-')}/{APP_VERSION}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise RuntimeError(
+                "No published GitHub release was found for this repository."
+            ) from exc
+
+        if exc.code == 403:
+            raise RuntimeError(
+                "GitHub temporarily rejected the update check, possibly due to "
+                "API rate limiting."
+            ) from exc
+
+        raise RuntimeError(f"GitHub returned HTTP {exc.code}.") from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise RuntimeError(f"Could not connect to GitHub: {reason}") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("GitHub returned an unreadable release response.") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("GitHub returned an unexpected release response.")
+
+    tag_name = str(payload.get("tag_name", "")).strip()
+    release_name = str(payload.get("name", "")).strip() or tag_name
+    release_url = str(payload.get("html_url", "")).strip()
+    published_at = str(payload.get("published_at", "")).strip()
+    body = str(payload.get("body", "")).strip()
+    prerelease = bool(payload.get("prerelease"))
+    draft = bool(payload.get("draft"))
+
+    if not tag_name:
+        raise RuntimeError("The latest GitHub release has no version tag.")
+
+    return {
+        "tag_name": tag_name,
+        "name": release_name,
+        "url": release_url,
+        "published_at": published_at,
+        "body": body,
+        "prerelease": prerelease,
+        "draft": draft,
+        "is_newer": (
+            normalize_version_tuple(tag_name)
+            > normalize_version_tuple(APP_VERSION)
+        ),
+    }
 
 
 # =============================================================================
@@ -5735,13 +5843,188 @@ def launch_gui():
             parent=root,
         )
 
-    def check_for_updates():
-        messagebox.showinfo(
+    update_check_state = {
+        "running": False,
+    }
+
+    def save_update_check_result(result: dict) -> None:
+        """Persist non-sensitive information about the most recent check."""
+        save_json_file(
+            UPDATE_SETTINGS_FILE,
+            {
+                "last_checked_at": current_local_timestamp(),
+                "current_version": APP_VERSION,
+                "latest_version": result.get("tag_name"),
+                "latest_release_url": result.get("url"),
+                "update_available": bool(result.get("is_newer")),
+            },
+        )
+
+    def show_update_result(result: dict) -> None:
+        """Display the latest-release result in a compact dialog."""
+        update_check_state["running"] = False
+        save_update_check_result(result)
+
+        dialog = tk.Toplevel(root)
+        dialog.title("Check for Updates")
+        dialog.geometry("620x470")
+        dialog.minsize(540, 400)
+        dialog.transient(root)
+        dialog.grab_set()
+        apply_window_icon(dialog, remember_key="updates")
+
+        container = ttk.Frame(dialog, padding=16)
+        container.pack(fill="both", expand=True)
+
+        if result["is_newer"]:
+            heading = f"Update available: {result['tag_name']}"
+            summary = (
+                f"You are running {APP_VERSION}. "
+                f"{result['name']} is available on GitHub."
+            )
+        else:
+            heading = "You are up to date"
+            summary = (
+                f"Installed version: {APP_VERSION}\n"
+                f"Latest published release: {result['tag_name']}"
+            )
+
+        ttk.Label(
+            container,
+            text=heading,
+            font=("Segoe UI", 15, "bold"),
+        ).pack(anchor="w")
+
+        ttk.Label(
+            container,
+            text=summary,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 12))
+
+        if result.get("published_at"):
+            ttk.Label(
+                container,
+                text=f"Published: {result['published_at']}",
+            ).pack(anchor="w", pady=(0, 8))
+
+        ttk.Label(
+            container,
+            text="Release notes",
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w")
+
+        notes = scrolledtext.ScrolledText(
+            container,
+            height=12,
+            wrap="word",
+            font=("Segoe UI", 9),
+        )
+        notes.pack(fill="both", expand=True, pady=(5, 12))
+        notes.insert(
+            "1.0",
+            result.get("body") or "No release notes were provided.",
+        )
+        notes.configure(state="disabled")
+
+        button_row = ttk.Frame(container)
+        button_row.pack(fill="x")
+
+        if result.get("url"):
+            ttk.Button(
+                button_row,
+                text="Open Release",
+                command=lambda: webbrowser.open(result["url"]),
+                cursor="hand2",
+            ).pack(side="left")
+
+        ttk.Button(
+            button_row,
+            text="Open Repository",
+            command=open_github_repository,
+            cursor="hand2",
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(
+            button_row,
+            text="Close",
+            command=dialog.destroy,
+            cursor="hand2",
+        ).pack(side="right")
+
+    def show_update_error(error_text: str) -> None:
+        update_check_state["running"] = False
+        messagebox.showerror(
             "Check for Updates",
-            "The update-check interface is ready, but a GitHub repository URL "
-            "must be configured before online version checks can be enabled.",
+            error_text,
             parent=root,
         )
+
+    def check_for_updates():
+        """Check GitHub for the latest published release without blocking Tk."""
+        if update_check_state["running"]:
+            messagebox.showinfo(
+                "Check for Updates",
+                "An update check is already running.",
+                parent=root,
+            )
+            return
+
+        if not GITHUB_REPOSITORY_URL:
+            messagebox.showinfo(
+                "Check for Updates",
+                "No GitHub repository URL has been configured.",
+                parent=root,
+            )
+            return
+
+        update_check_state["running"] = True
+
+        status_window = tk.Toplevel(root)
+        status_window.title("Check for Updates")
+        status_window.geometry("390x130")
+        status_window.resizable(False, False)
+        status_window.transient(root)
+        apply_window_icon(status_window, remember_key="update_status")
+
+        frame = ttk.Frame(status_window, padding=18)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text="Checking GitHub for the latest release…",
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w")
+
+        update_progress = ttk.Progressbar(
+            frame,
+            mode="indeterminate",
+            length=340,
+        )
+        update_progress.pack(fill="x", pady=(14, 0))
+        update_progress.start(10)
+
+        def worker():
+            try:
+                result = fetch_latest_github_release(GITHUB_REPOSITORY_URL)
+                root.after(0, lambda: finish_success(result))
+            except Exception as exc:
+                root.after(0, lambda: finish_error(str(exc)))
+
+        def close_status_window():
+            update_progress.stop()
+
+            if status_window.winfo_exists():
+                status_window.destroy()
+
+        def finish_success(result):
+            close_status_window()
+            show_update_result(result)
+
+        def finish_error(error_text):
+            close_status_window()
+            show_update_error(error_text)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def open_github_repository():
         """Open the configured GitHub repository or explain what is missing."""
