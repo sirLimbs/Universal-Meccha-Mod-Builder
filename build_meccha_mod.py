@@ -5461,6 +5461,237 @@ def launch_gui():
                     f"Could not stop the build:\n\n{exc}",
                 )
 
+    def show_post_build_summary(
+        *,
+        status: str,
+        duration_seconds,
+        log_path,
+        exit_code: int | None = None,
+        recovered_workshop_id: str = "",
+        error_text: str = "",
+    ) -> None:
+        """Show a useful completion window with direct post-build actions."""
+        dialog = tk.Toplevel(root)
+        dialog.title("Build Summary")
+        dialog.geometry("690x520")
+        dialog.minsize(600, 460)
+        dialog.transient(root)
+        apply_window_icon(dialog, remember_key="build_summary")
+
+        container = ttk.Frame(dialog, padding=16)
+        container.pack(fill="both", expand=True)
+
+        normalized_status = str(status).strip().lower()
+        status_labels = {
+            "success": ("Build completed successfully", "✓"),
+            "failed": ("Build failed", "✗"),
+            "cancelled": ("Build cancelled", "■"),
+        }
+        heading_text, status_symbol = status_labels.get(
+            normalized_status,
+            (str(status).title(), "•"),
+        )
+
+        ttk.Label(
+            container,
+            text=f"{status_symbol}  {heading_text}",
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+
+        summary_frame = ttk.LabelFrame(
+            container,
+            text="Summary",
+            padding=10,
+        )
+        summary_frame.pack(fill="x", pady=(12, 10))
+        summary_frame.columnconfigure(1, weight=1)
+
+        summary_rows = [
+            ("Status", heading_text),
+            ("Duration", format_duration(duration_seconds)),
+            (
+                "Exit code",
+                str(exit_code) if exit_code is not None else "N/A",
+            ),
+            (
+                "Build mode",
+                describe_build_mode(build_state.get("mode") or "unknown"),
+            ),
+        ]
+
+        configuration = build_state.get("configuration") or {}
+
+        if isinstance(configuration, dict):
+            plugin_name = str(configuration.get("plugin", "")).strip()
+            release_name = str(configuration.get("release", "")).strip()
+
+            if plugin_name:
+                summary_rows.append(("Plugin", plugin_name))
+
+            if release_name:
+                summary_rows.append(("Release", release_name))
+
+        if recovered_workshop_id:
+            summary_rows.append(("Workshop ID", recovered_workshop_id))
+
+        for row_index, (label, value) in enumerate(summary_rows):
+            ttk.Label(
+                summary_frame,
+                text=f"{label}:",
+                font=("Segoe UI", 9, "bold"),
+            ).grid(
+                row=row_index,
+                column=0,
+                sticky="nw",
+                padx=(0, 12),
+                pady=2,
+            )
+            ttk.Label(
+                summary_frame,
+                text=value or "—",
+                justify="left",
+                wraplength=500,
+            ).grid(
+                row=row_index,
+                column=1,
+                sticky="nw",
+                pady=2,
+            )
+
+        details_frame = ttk.LabelFrame(
+            container,
+            text="Details",
+            padding=10,
+        )
+        details_frame.pack(fill="both", expand=True)
+
+        details_box = scrolledtext.ScrolledText(
+            details_frame,
+            height=10,
+            wrap="word",
+            font=("Consolas", 9),
+        )
+        details_box.pack(fill="both", expand=True)
+
+        details_lines = []
+
+        if error_text:
+            details_lines.extend(
+                [
+                    "Error",
+                    "-----",
+                    str(error_text),
+                    "",
+                ]
+            )
+
+        if log_path:
+            details_lines.extend(
+                [
+                    "Saved log",
+                    "---------",
+                    str(log_path),
+                    "",
+                ]
+            )
+
+        workshop_path_text = fields["workshop"].get().strip()
+
+        if workshop_path_text:
+            details_lines.extend(
+                [
+                    "Workshop folder",
+                    "---------------",
+                    workshop_path_text,
+                ]
+            )
+
+        details_box.insert(
+            "1.0",
+            "\n".join(details_lines) or "No additional details.",
+        )
+        details_box.configure(state="disabled")
+
+        button_row = ttk.Frame(container)
+        button_row.pack(fill="x", pady=(12, 0))
+
+        if log_path:
+            ttk.Button(
+                button_row,
+                text="Open Log",
+                command=lambda: open_path_in_windows(Path(log_path)),
+                cursor="hand2",
+            ).pack(side="left")
+
+            ttk.Button(
+                button_row,
+                text="Open Log Folder",
+                command=lambda: open_path_in_windows(Path(log_path).parent),
+                cursor="hand2",
+            ).pack(side="left", padx=(8, 0))
+
+        workshop_path = (
+            Path(workshop_path_text).expanduser()
+            if workshop_path_text
+            else None
+        )
+
+        if workshop_path is not None:
+            ttk.Button(
+                button_row,
+                text="Open Workshop Folder",
+                command=lambda: open_path_in_windows(workshop_path),
+                cursor="hand2",
+            ).pack(side="left", padx=(8, 0))
+
+        if recovered_workshop_id:
+            workshop_url = (
+                "https://steamcommunity.com/sharedfiles/filedetails/?id="
+                + recovered_workshop_id
+            )
+
+            ttk.Button(
+                button_row,
+                text="Open Workshop Page",
+                command=lambda: webbrowser.open(workshop_url),
+                cursor="hand2",
+            ).pack(side="left", padx=(8, 0))
+
+        def copy_summary():
+            lines = [
+                heading_text,
+                f"Duration: {format_duration(duration_seconds)}",
+                f"Exit code: {exit_code if exit_code is not None else 'N/A'}",
+            ]
+
+            if recovered_workshop_id:
+                lines.append(f"Workshop ID: {recovered_workshop_id}")
+
+            if error_text:
+                lines.append(f"Error: {error_text}")
+
+            if log_path:
+                lines.append(f"Log: {log_path}")
+
+            root.clipboard_clear()
+            root.clipboard_append("\n".join(lines))
+            root.update_idletasks()
+            status_var.set("Build summary copied")
+
+        ttk.Button(
+            button_row,
+            text="Copy Summary",
+            command=copy_summary,
+            cursor="hand2",
+        ).pack(side="right", padx=(8, 0))
+
+        ttk.Button(
+            button_row,
+            text="Close",
+            command=dialog.destroy,
+            cursor="hand2",
+        ).pack(side="right")
+
     def poll_queue():
         try:
             while True:
@@ -5515,9 +5746,11 @@ def launch_gui():
                             final_duration,
                         )
 
-                        messagebox.showwarning(
-                            "Meccha Builder",
-                            "The build was cancelled.\n\n" f"Log saved to:\n{log_path}",
+                        show_post_build_summary(
+                            status="cancelled",
+                            duration_seconds=final_duration,
+                            log_path=log_path,
+                            exit_code=value,
                         )
 
                     elif value == 0:
@@ -5537,18 +5770,12 @@ def launch_gui():
                             final_duration,
                         )
 
-                        workshop_result = (
-                            f"\nNew Workshop ID: {recovered_workshop_id}\n"
-                            if recovered_workshop_id
-                            else ""
-                        )
-
-                        messagebox.showinfo(
-                            "Meccha Builder",
-                            "Build completed successfully.\n\n"
-                            f"Duration: {format_duration(final_duration)}\n"
-                            f"{workshop_result}"
-                            f"Log saved to:\n{log_path}",
+                        show_post_build_summary(
+                            status="success",
+                            duration_seconds=final_duration,
+                            log_path=log_path,
+                            exit_code=value,
+                            recovered_workshop_id=recovered_workshop_id,
                         )
 
                     else:
@@ -5566,12 +5793,12 @@ def launch_gui():
                             final_duration,
                         )
 
-                        messagebox.showerror(
-                            "Meccha Builder",
-                            f"Build failed with exit code {value}.\n"
-                            "Review the log.\n\n"
-                            f"Duration: {format_duration(final_duration)}\n"
-                            f"Log saved to:\n{log_path}",
+                        show_post_build_summary(
+                            status="failed",
+                            duration_seconds=final_duration,
+                            log_path=log_path,
+                            exit_code=value,
+                            error_text=f"Process exited with code {value}",
                         )
 
                     reset_active_build_state()
