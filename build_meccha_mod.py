@@ -28,8 +28,9 @@ APP_VERSION = "1.2.0"
 
 MECCHA_APP_ID = "4704690"  # DO NOT CHANGE
 
+# SPDX-License-Identifier: GPL-3.0-only
 GITHUB_REPOSITORY_URL = "https://github.com/sirLimbs/Universal-Meccha-Mod-Builder"
-LICENSE_NAME = "N/A"
+LICENSE_NAME = "GPL-3.0-only"
 MECCHA_DISCLAIMER = (
     "This is an independent community tool and is not affiliated with or "
     "endorsed by the developers or publishers of Meccha Chameleon."
