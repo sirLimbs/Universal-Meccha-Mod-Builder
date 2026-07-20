@@ -1489,6 +1489,67 @@ def fetch_latest_github_release(repository_url: str, timeout: int = 10) -> dict:
     }
 
 
+def default_update_settings() -> dict:
+    """Return persisted update-check preferences and status defaults."""
+    return {
+        "auto_check": True,
+        "check_interval_hours": 24,
+        "last_checked_at": None,
+        "current_version": APP_VERSION,
+        "latest_version": None,
+        "latest_release_url": None,
+        "update_available": False,
+        "dismissed_version": None,
+    }
+
+
+def load_update_settings() -> dict:
+    """Load update settings while preserving backward compatibility."""
+    data = load_json_file(UPDATE_SETTINGS_FILE, default_update_settings())
+
+    if not isinstance(data, dict):
+        data = {}
+
+    merged = default_update_settings()
+    merged.update(data)
+
+    try:
+        merged["check_interval_hours"] = max(
+            1,
+            int(merged.get("check_interval_hours", 24)),
+        )
+    except (TypeError, ValueError):
+        merged["check_interval_hours"] = 24
+
+    merged["auto_check"] = bool(merged.get("auto_check", True))
+    return merged
+
+
+def update_check_is_due(settings: dict, now: datetime | None = None) -> bool:
+    """Return True when the automatic update interval has elapsed."""
+    if not settings.get("auto_check", True):
+        return False
+
+    last_checked_at = settings.get("last_checked_at")
+
+    if not last_checked_at:
+        return True
+
+    try:
+        last_checked = datetime.fromisoformat(str(last_checked_at))
+    except ValueError:
+        return True
+
+    if last_checked.tzinfo is None:
+        last_checked = last_checked.astimezone()
+
+    current_time = now or datetime.now().astimezone()
+    interval_hours = max(1, int(settings.get("check_interval_hours", 24)))
+    elapsed_seconds = (current_time - last_checked).total_seconds()
+
+    return elapsed_seconds >= interval_hours * 3600
+
+
 # =============================================================================
 # Tkinter graphical interface
 # =============================================================================
@@ -2353,7 +2414,7 @@ def launch_gui():
     def open_workshop_manager():
         dialog = tk.Toplevel(root)
         dialog.title("Workshop Manager")
-        dialog.geometry("680x920")
+        dialog.geometry("700x920")
         dialog.minsize(680, 580)
         dialog.transient(root)
         dialog.grab_set()
@@ -5843,22 +5904,25 @@ def launch_gui():
             parent=root,
         )
 
+    update_settings = load_update_settings()
+
     update_check_state = {
         "running": False,
+        "silent": False,
     }
 
     def save_update_check_result(result: dict) -> None:
-        """Persist non-sensitive information about the most recent check."""
-        save_json_file(
-            UPDATE_SETTINGS_FILE,
+        """Persist update status without discarding user preferences."""
+        update_settings.update(
             {
                 "last_checked_at": current_local_timestamp(),
                 "current_version": APP_VERSION,
                 "latest_version": result.get("tag_name"),
                 "latest_release_url": result.get("url"),
                 "update_available": bool(result.get("is_newer")),
-            },
+            }
         )
+        save_json_file(UPDATE_SETTINGS_FILE, update_settings)
 
     def show_update_result(result: dict) -> None:
         """Display the latest-release result in a compact dialog."""
@@ -5944,6 +6008,19 @@ def launch_gui():
             cursor="hand2",
         ).pack(side="left", padx=(8, 0))
 
+        if result["is_newer"]:
+            def dismiss_this_version():
+                update_settings["dismissed_version"] = result["tag_name"]
+                save_json_file(UPDATE_SETTINGS_FILE, update_settings)
+                dialog.destroy()
+
+            ttk.Button(
+                button_row,
+                text="Skip This Version",
+                command=dismiss_this_version,
+                cursor="hand2",
+            ).pack(side="right", padx=(0, 8))
+
         ttk.Button(
             button_row,
             text="Close",
@@ -5951,57 +6028,71 @@ def launch_gui():
             cursor="hand2",
         ).pack(side="right")
 
-    def show_update_error(error_text: str) -> None:
+    def show_update_error(error_text: str, *, silent: bool = False) -> None:
         update_check_state["running"] = False
+        update_check_state["silent"] = False
+
+        if silent:
+            print(f"Automatic update check failed: {error_text}")
+            return
+
         messagebox.showerror(
             "Check for Updates",
             error_text,
             parent=root,
         )
 
-    def check_for_updates():
+    def check_for_updates(*, silent: bool = False):
         """Check GitHub for the latest published release without blocking Tk."""
         if update_check_state["running"]:
-            messagebox.showinfo(
-                "Check for Updates",
-                "An update check is already running.",
-                parent=root,
-            )
+            if not silent:
+                messagebox.showinfo(
+                    "Check for Updates",
+                    "An update check is already running.",
+                    parent=root,
+                )
             return
 
         if not GITHUB_REPOSITORY_URL:
-            messagebox.showinfo(
-                "Check for Updates",
-                "No GitHub repository URL has been configured.",
-                parent=root,
-            )
+            if not silent:
+                messagebox.showinfo(
+                    "Check for Updates",
+                    "No GitHub repository URL has been configured.",
+                    parent=root,
+                )
             return
 
         update_check_state["running"] = True
+        update_check_state["silent"] = silent
 
-        status_window = tk.Toplevel(root)
-        status_window.title("Check for Updates")
-        status_window.geometry("390x130")
-        status_window.resizable(False, False)
-        status_window.transient(root)
-        apply_window_icon(status_window, remember_key="update_status")
+        status_window = None
 
-        frame = ttk.Frame(status_window, padding=18)
-        frame.pack(fill="both", expand=True)
+        if not silent:
+            status_window = tk.Toplevel(root)
+            status_window.title("Check for Updates")
+            status_window.geometry("390x130")
+            status_window.resizable(False, False)
+            status_window.transient(root)
+            apply_window_icon(status_window, remember_key="update_status")
 
-        ttk.Label(
-            frame,
-            text="Checking GitHub for the latest release…",
-            font=("Segoe UI", 10, "bold"),
-        ).pack(anchor="w")
+            frame = ttk.Frame(status_window, padding=18)
+            frame.pack(fill="both", expand=True)
 
-        update_progress = ttk.Progressbar(
-            frame,
-            mode="indeterminate",
-            length=340,
-        )
-        update_progress.pack(fill="x", pady=(14, 0))
-        update_progress.start(10)
+            ttk.Label(
+                frame,
+                text="Checking GitHub for the latest release…",
+                font=("Segoe UI", 10, "bold"),
+            ).pack(anchor="w")
+
+            update_progress = ttk.Progressbar(
+                frame,
+                mode="indeterminate",
+                length=340,
+            )
+            update_progress.pack(fill="x", pady=(14, 0))
+            update_progress.start(10)
+        else:
+            update_progress = None
 
         def worker():
             try:
@@ -6011,20 +6102,142 @@ def launch_gui():
                 root.after(0, lambda: finish_error(str(exc)))
 
         def close_status_window():
-            update_progress.stop()
+            if update_progress is not None:
+                update_progress.stop()
 
-            if status_window.winfo_exists():
+            if status_window is not None and status_window.winfo_exists():
                 status_window.destroy()
 
         def finish_success(result):
             close_status_window()
+            update_check_state["running"] = False
+            update_check_state["silent"] = False
+            save_update_check_result(result)
+
+            dismissed_version = update_settings.get("dismissed_version")
+
+            if (
+                silent
+                and (
+                    not result.get("is_newer")
+                    or result.get("tag_name") == dismissed_version
+                )
+            ):
+                return
+
             show_update_result(result)
 
         def finish_error(error_text):
             close_status_window()
-            show_update_error(error_text)
+            show_update_error(error_text, silent=silent)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def show_update_preferences():
+        """Open automatic update-check preferences."""
+        dialog = tk.Toplevel(root)
+        dialog.title("Update Preferences")
+        dialog.geometry("500x320")
+        dialog.resizable(False, False)
+        dialog.transient(root)
+        dialog.grab_set()
+        apply_window_icon(dialog, remember_key="update_preferences")
+
+        container = ttk.Frame(dialog, padding=18)
+        container.pack(fill="both", expand=True)
+
+        auto_check_var = tk.BooleanVar(
+            value=bool(update_settings.get("auto_check", True))
+        )
+        interval_var = tk.StringVar(
+            value=str(update_settings.get("check_interval_hours", 24))
+        )
+
+        ttk.Label(
+            container,
+            text="Update Preferences",
+            font=("Segoe UI", 15, "bold"),
+        ).pack(anchor="w")
+
+        ttk.Label(
+            container,
+            text=(
+                "Control how often Meccha Mod Builder checks GitHub for "
+                "published releases."
+            ),
+            wraplength=450,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 14))
+
+        ttk.Checkbutton(
+            container,
+            text="Automatically check for updates when the app starts",
+            variable=auto_check_var,
+        ).pack(anchor="w")
+
+        interval_row = ttk.Frame(container)
+        interval_row.pack(fill="x", pady=(14, 0))
+
+        ttk.Label(
+            interval_row,
+            text="Minimum interval:",
+        ).pack(side="left")
+
+        interval_combo = ttk.Combobox(
+            interval_row,
+            textvariable=interval_var,
+            values=("6", "12", "24", "48", "168"),
+            state="readonly",
+            width=8,
+        )
+        interval_combo.pack(side="left", padx=(8, 6))
+
+        ttk.Label(
+            interval_row,
+            text="hours",
+        ).pack(side="left")
+
+        last_checked = update_settings.get("last_checked_at") or "Never"
+        latest_version = update_settings.get("latest_version") or "Unknown"
+
+        ttk.Label(
+            container,
+            text=(
+                f"Last checked: {last_checked}\n"
+                f"Latest known release: {latest_version}"
+            ),
+            justify="left",
+        ).pack(anchor="w", pady=(16, 0))
+
+        button_row = ttk.Frame(container)
+        button_row.pack(side="bottom", fill="x", pady=(18, 0))
+
+        def save_preferences():
+            update_settings["auto_check"] = auto_check_var.get()
+            update_settings["check_interval_hours"] = int(interval_var.get())
+            save_json_file(UPDATE_SETTINGS_FILE, update_settings)
+            dialog.destroy()
+
+        ttk.Button(
+            button_row,
+            text="Check Now",
+            command=lambda: check_for_updates(silent=False),
+            cursor="hand2",
+        ).pack(side="left")
+
+        ttk.Button(
+            button_row,
+            text="Cancel",
+            command=dialog.destroy,
+            cursor="hand2",
+        ).pack(side="right")
+
+        ttk.Button(
+            button_row,
+            text="Save",
+            command=save_preferences,
+            cursor="hand2",
+        ).pack(side="right", padx=(0, 8))
 
     def open_github_repository():
         """Open the configured GitHub repository or explain what is missing."""
@@ -6644,6 +6857,10 @@ def launch_gui():
         command=check_for_updates,
     )
     help_menu.add_command(
+        label="Update Preferences",
+        command=show_update_preferences,
+    )
+    help_menu.add_command(
         label="Release Notes",
         command=show_release_notes,
     )
@@ -6755,6 +6972,12 @@ def launch_gui():
     apply_hardcoded_branding()
     update_steamcmd_visibility()
     poll_queue()
+
+    if update_check_is_due(update_settings):
+        root.after(
+            1800,
+            lambda: check_for_updates(silent=True),
+        )
 
     root.protocol("WM_DELETE_WINDOW", close_application)
     root.mainloop()
