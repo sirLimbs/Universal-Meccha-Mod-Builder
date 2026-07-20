@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -1637,75 +1638,393 @@ def launch_gui():
     add_entry("Workshop folder", "workshop", browse_workshop)
     add_entry("Preview image", "preview", browse_preview)
 
-    compact = ttk.Frame(form)
-    compact.grid(row=row, column=0, columnspan=3, sticky="ew", pady=6)
-    for i in range(8):
-        compact.columnconfigure(i, weight=1)
+    release_frame = ttk.Frame(form)
+    release_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=6)
+    release_frame.columnconfigure(1, weight=1)
 
-    def small_field(col, label_text, key, values=None):
-        label = ttk.Label(compact, text=label_text)
-        label.grid(row=0, column=col * 2, sticky="w", padx=(0 if col == 0 else 12, 5))
-        if values:
-            widget = ttk.Combobox(
-                compact,
-                textvariable=fields[key],
-                values=values,
-                state="readonly",
-                width=9,
-            )
-        else:
-            widget = ttk.Entry(compact, textvariable=fields[key], width=13)
-        widget.grid(row=0, column=col * 2 + 1, sticky="ew")
-        ToolTip(label, hints.get(key, ""))
-        ToolTip(widget, hints.get(key, ""))
-
-    small_field(0, "Release", "release")
-    small_field(1, "App ID", "appid")
-    small_field(2, "Published ID", "publishedfileid")
-    small_field(3, "Visibility", "visibility", ["0", "1", "2"])
+    release_label = ttk.Label(release_frame, text="Release")
+    release_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+    release_entry = ttk.Entry(
+        release_frame,
+        textvariable=fields["release"],
+        width=16,
+    )
+    release_entry.grid(row=0, column=1, sticky="w")
+    ToolTip(release_label, "Release version used by Unreal's DLC build.")
+    ToolTip(release_entry, "Release version used by Unreal's DLC build.")
     row += 1
 
-    add_entry("Workshop title", "title")
-    add_entry("Description", "description")
-    add_entry("Change note", "changenote")
-    add_entry("SteamCMD.exe", "steamcmd", browse_steamcmd)
-    add_entry("Steam login args", "steam_login")
+    workshop_summary_var = tk.StringVar()
 
-    steam_login_warning = ttk.Label(
+    def update_workshop_summary():
+        published_id = fields["publishedfileid"].get().strip()
+        mode_text = (
+            "Create new item"
+            if not published_id or published_id == "0"
+            else f"Update item {published_id}"
+        )
+        visibility_labels = {
+            "0": "Public",
+            "1": "Friends-only",
+            "2": "Private",
+        }
+        visibility_text = visibility_labels.get(
+            fields["visibility"].get().strip(),
+            "Unknown visibility",
+        )
+        upload_text = "SteamCMD upload enabled" if flags["upload"].get() else "Local package only"
+        workshop_summary_var.set(
+            f"{mode_text}  •  {visibility_text}  •  {upload_text}"
+        )
+
+    def open_workshop_manager():
+        dialog = tk.Toplevel(root)
+        dialog.title("Workshop Manager")
+        dialog.geometry("760x690")
+        dialog.minsize(680, 580)
+        dialog.transient(root)
+        dialog.grab_set()
+
+        try:
+            if WINDOW_ICON_PATH.is_file():
+                dialog.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
+        except Exception:
+            pass
+
+        original_published_id = fields["publishedfileid"].get().strip()
+        remembered_published_id = (
+            original_published_id
+            if original_published_id and original_published_id != "0"
+            else ""
+        )
+
+        mode_var = tk.StringVar(
+            value=(
+                "create"
+                if not original_published_id or original_published_id == "0"
+                else "update"
+            )
+        )
+        workshop_var = tk.StringVar(value=fields["workshop"].get())
+        preview_var = tk.StringVar(value=fields["preview"].get())
+        appid_var = tk.StringVar(value=fields["appid"].get() or MECCHA_APP_ID)
+        published_id_var = tk.StringVar(
+            value=original_published_id or "0"
+        )
+        visibility_var = tk.StringVar(value=fields["visibility"].get() or "2")
+        title_var = tk.StringVar(value=fields["title"].get())
+        changenote_var = tk.StringVar(value=fields["changenote"].get())
+        steamcmd_var = tk.StringVar(value=fields["steamcmd"].get())
+        steam_login_var = tk.StringVar(value=fields["steam_login"].get())
+        upload_var = tk.BooleanVar(value=flags["upload"].get())
+
+        container = ttk.Frame(dialog, padding=14)
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            container,
+            text="Steam Workshop Settings",
+            font=("Segoe UI", 16, "bold"),
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(
+            container,
+            text=(
+                "Configure the item metadata and optional SteamCMD upload without "
+                "crowding the main build screen."
+            ),
+            wraplength=700,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 14))
+
+        mode_frame = ttk.LabelFrame(container, text="Workshop item mode", padding=10)
+        mode_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+
+        def sync_mode():
+            if mode_var.get() == "create":
+                published_id_var.set("0")
+                published_id_entry.configure(state="disabled")
+            else:
+                if published_id_var.get().strip() in {"", "0"}:
+                    published_id_var.set(remembered_published_id)
+                published_id_entry.configure(state="normal")
+
+        ttk.Radiobutton(
+            mode_frame,
+            text="Create new item",
+            variable=mode_var,
+            value="create",
+            command=sync_mode,
+        ).pack(side="left", padx=(0, 18))
+        ttk.Radiobutton(
+            mode_frame,
+            text="Update existing item",
+            variable=mode_var,
+            value="update",
+            command=sync_mode,
+        ).pack(side="left")
+
+        def add_dialog_entry(row_index, label_text, variable, browse_command=None, *, readonly=False):
+            ttk.Label(container, text=label_text).grid(
+                row=row_index, column=0, sticky="w", padx=(0, 8), pady=4
+            )
+            entry = ttk.Entry(
+                container,
+                textvariable=variable,
+                state="readonly" if readonly else "normal",
+            )
+            entry.grid(row=row_index, column=1, sticky="ew", pady=4)
+            if browse_command:
+                ttk.Button(
+                    container,
+                    text="Browse…",
+                    command=browse_command,
+                    cursor="hand2",
+                ).grid(row=row_index, column=2, padx=(8, 0), pady=4)
+            return entry
+
+        def choose_workshop_folder():
+            value = filedialog.askdirectory(
+                parent=dialog,
+                title="Select Workshop staging folder",
+                initialdir=workshop_var.get() or None,
+            )
+            if value:
+                workshop_var.set(value)
+
+        def choose_preview_image():
+            value = filedialog.askopenfilename(
+                parent=dialog,
+                title="Select preview image",
+                filetypes=[("Images", "*.png *.jpg *.jpeg"), ("All", "*.*")],
+            )
+            if value:
+                preview_var.set(value)
+
+        def choose_steamcmd():
+            value = filedialog.askopenfilename(
+                parent=dialog,
+                title="Select steamcmd.exe",
+                filetypes=[
+                    ("SteamCMD", "steamcmd.exe"),
+                    ("Executables", "*.exe"),
+                    ("All", "*.*"),
+                ],
+            )
+            if value:
+                steamcmd_var.set(value)
+
+        add_dialog_entry(3, "Workshop folder", workshop_var, choose_workshop_folder)
+        add_dialog_entry(4, "Preview image", preview_var, choose_preview_image)
+        add_dialog_entry(5, "Steam App ID", appid_var, readonly=True)
+        published_id_entry = add_dialog_entry(
+            6, "Published File ID", published_id_var
+        )
+
+        ttk.Label(container, text="Visibility").grid(
+            row=7, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        visibility_combo = ttk.Combobox(
+            container,
+            textvariable=visibility_var,
+            values=["0", "1", "2"],
+            state="readonly",
+        )
+        visibility_combo.grid(row=7, column=1, sticky="ew", pady=4)
+
+        add_dialog_entry(8, "Workshop title", title_var)
+
+        ttk.Label(container, text="Description").grid(
+            row=9, column=0, sticky="nw", padx=(0, 8), pady=4
+        )
+        description_text = tk.Text(
+            container,
+            height=5,
+            wrap="word",
+            font=("Segoe UI", 10),
+        )
+        description_text.grid(row=9, column=1, columnspan=2, sticky="nsew", pady=4)
+        description_text.insert("1.0", fields["description"].get())
+        container.rowconfigure(9, weight=1)
+
+        add_dialog_entry(10, "Change note", changenote_var)
+
+        upload_frame = ttk.LabelFrame(container, text="SteamCMD upload", padding=10)
+        upload_frame.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        upload_frame.columnconfigure(1, weight=1)
+
+        upload_check = ttk.Checkbutton(
+            upload_frame,
+            text="Upload automatically after packaging",
+            variable=upload_var,
+        )
+        upload_check.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+
+        ttk.Label(upload_frame, text="SteamCMD.exe").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        steamcmd_entry = ttk.Entry(upload_frame, textvariable=steamcmd_var)
+        steamcmd_entry.grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Button(
+            upload_frame,
+            text="Browse…",
+            command=choose_steamcmd,
+            cursor="hand2",
+        ).grid(row=1, column=2, padx=(8, 0), pady=4)
+
+        ttk.Label(upload_frame, text="Login arguments").grid(
+            row=2, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        ttk.Entry(upload_frame, textvariable=steam_login_var).grid(
+            row=2, column=1, columnspan=2, sticky="ew", pady=4
+        )
+        ttk.Label(
+            upload_frame,
+            text=(
+                "Optional and stored locally. Logging in through SteamCMD beforehand "
+                "is recommended so credentials are not stored in settings."
+            ),
+            foreground="#e05252",
+            wraplength=620,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+        def open_local_workshop_folder():
+            path = Path(workshop_var.get().strip()).expanduser()
+            if path.is_dir():
+                os.startfile(path)
+            else:
+                messagebox.showwarning(
+                    "Workshop folder",
+                    "The selected Workshop folder does not exist.",
+                    parent=dialog,
+                )
+
+        def open_workshop_page():
+            published_id = published_id_var.get().strip()
+            if not published_id.isdigit() or published_id == "0":
+                messagebox.showwarning(
+                    "Workshop page",
+                    "Enter an existing numeric Published File ID first.",
+                    parent=dialog,
+                )
+                return
+            webbrowser.open(
+                "https://steamcommunity.com/sharedfiles/filedetails/?id="
+                + published_id
+            )
+
+        def save_workshop_settings():
+            published_id = published_id_var.get().strip()
+            if mode_var.get() == "create":
+                published_id = "0"
+            elif not published_id.isdigit() or published_id == "0":
+                messagebox.showerror(
+                    "Workshop Manager",
+                    "Update mode requires a non-zero numeric Published File ID.",
+                    parent=dialog,
+                )
+                return
+
+            appid = appid_var.get().strip()
+            if not appid.isdigit():
+                messagebox.showerror(
+                    "Workshop Manager",
+                    "Steam App ID must be numeric.",
+                    parent=dialog,
+                )
+                return
+
+            if upload_var.get() and not steamcmd_var.get().strip():
+                messagebox.showerror(
+                    "Workshop Manager",
+                    "Select steamcmd.exe or disable automatic upload.",
+                    parent=dialog,
+                )
+                return
+
+            fields["workshop"].set(workshop_var.get().strip())
+            fields["preview"].set(preview_var.get().strip())
+            fields["appid"].set(appid)
+            fields["publishedfileid"].set(published_id)
+            fields["visibility"].set(visibility_var.get().strip())
+            fields["title"].set(title_var.get())
+            fields["description"].set(description_text.get("1.0", "end-1c"))
+            fields["changenote"].set(changenote_var.get())
+            fields["steamcmd"].set(steamcmd_var.get().strip())
+            fields["steam_login"].set(steam_login_var.get())
+            flags["upload"].set(bool(upload_var.get()))
+
+            update_workshop_summary()
+            save_settings()
+            status_var.set("Workshop settings saved")
+            dialog.destroy()
+
+        button_frame = ttk.Frame(container)
+        button_frame.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+
+        ttk.Button(
+            button_frame,
+            text="Open Workshop Folder",
+            command=open_local_workshop_folder,
+            cursor="hand2",
+        ).pack(side="left")
+        ttk.Button(
+            button_frame,
+            text="Open Workshop Page",
+            command=open_workshop_page,
+            cursor="hand2",
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            button_frame,
+            text="Cancel",
+            command=dialog.destroy,
+            cursor="hand2",
+        ).pack(side="right")
+        ttk.Button(
+            button_frame,
+            text="Save Settings",
+            command=save_workshop_settings,
+            cursor="hand2",
+        ).pack(side="right", padx=(0, 8))
+
+        sync_mode()
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.wait_window()
+
+    workshop_manager_frame = ttk.LabelFrame(
         form,
-        text=(
-            "LOCAL ONLY — OPTIONAL. Recommended: log in through SteamCMD beforehand, "
-            "or upload the completed build manually with SteamCMD."
-        ),
-        foreground="#e05252",
-        wraplength=720,
-        justify="left",
+        text="Steam Workshop",
+        padding=8,
     )
-
-    steam_login_warning.grid(
+    workshop_manager_frame.grid(
         row=row,
-        column=1,
-        columnspan=2,
-        sticky="w",
-        pady=(0, 8),
+        column=0,
+        columnspan=3,
+        sticky="ew",
+        pady=(6, 4),
     )
+    workshop_manager_frame.columnconfigure(0, weight=1)
 
+    ttk.Label(
+        workshop_manager_frame,
+        textvariable=workshop_summary_var,
+    ).grid(row=0, column=0, sticky="w")
+    workshop_manager_button = ttk.Button(
+        workshop_manager_frame,
+        text="Workshop Manager…",
+        command=open_workshop_manager,
+        cursor="hand2",
+    )
+    workshop_manager_button.grid(row=0, column=1, padx=(10, 0))
+    ToolTip(
+        workshop_manager_button,
+        "Configure Workshop metadata, visibility, item ID, and SteamCMD upload.",
+    )
     row += 1
 
     def update_steamcmd_visibility():
-        visible = flags["upload"].get()
-
-        for key in ("steamcmd", "steam_login"):
-            for widget in field_rows.get(key, []):
-                if visible:
-                    widget.grid()
-                else:
-                    widget.grid_remove()
-
-        if visible:
-            steam_login_warning.grid()
-        else:
-            steam_login_warning.grid_remove()
+        update_workshop_summary()
 
     theme_frame = ttk.Frame(form)
     theme_frame.grid(row=row, column=0, columnspan=3, sticky="w", pady=(4, 0))
@@ -1746,6 +2065,12 @@ def launch_gui():
     )
 
     upload_checkbox.pack(side="left", padx=6)
+    ToolTip(
+        upload_checkbox,
+        "Enable automatic SteamCMD upload using settings from Workshop Manager.",
+    )
+
+    update_workshop_summary()
 
     profile_bar = ttk.LabelFrame(outer, text="Profiles", padding=8)
     profile_bar.pack(fill="x", pady=(8, 0))
