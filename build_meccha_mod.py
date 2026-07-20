@@ -1,10 +1,11 @@
-
+# =============================================================================
 # Imports
 # =============================================================================
 
 import argparse
 import json
 import os
+import platform
 import queue
 import re
 import shutil
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import threading
 import webbrowser
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -1326,54 +1328,41 @@ def launch_gui():
     rebuild_build_statistics()
 
     branding_refs = {
-        "window_icon": None,
         "header_logo": None,
+        "window_icon_targets": {},
     }
 
-    def apply_window_icon():
+    def apply_window_icon(window, *, remember_key=None):
         """
-        Apply the application icon using both iconphoto and iconbitmap.
+        Apply icon.ico to the root window and all child windows.
 
-        iconphoto provides a reliable taskbar/title-bar icon when running the
-        Python script, while iconbitmap preserves the native Windows ICO path
-        used by packaged builds.
+        icon.png is reserved exclusively for the large header branding image.
         """
-        photo_icon = branding_refs.get("window_icon")
+        if not WINDOW_ICON_PATH.is_file():
+            print(f"ICO file does not exist: {WINDOW_ICON_PATH}")
+            return
 
-        if photo_icon is None and HEADER_LOGO_PATH.is_file():
-            try:
-                if pillow_available:
-                    image = Image.open(HEADER_LOGO_PATH).convert("RGBA")
-                    photo_icon = ImageTk.PhotoImage(image)
-                else:
-                    photo_icon = tk.PhotoImage(file=str(HEADER_LOGO_PATH.resolve()))
+        icon_path = str(WINDOW_ICON_PATH.resolve())
 
-                branding_refs["window_icon"] = photo_icon
-            except Exception as exc:
-                print(f"Could not load PNG window icon: {exc}")
+        try:
+            # The direct form applies the icon to the current window.
+            window.iconbitmap(icon_path)
+        except Exception as exc:
+            print(f"iconbitmap failed for {window}: {exc}")
 
-        if photo_icon is not None:
-            try:
-                root.iconphoto(True, photo_icon)
-            except Exception as exc:
-                print(f"iconphoto failed: {exc}")
+        try:
+            # The default form helps newly created Tk/Toplevel windows inherit it.
+            window.iconbitmap(default=icon_path)
+        except Exception:
+            pass
 
-        if WINDOW_ICON_PATH.is_file():
-            try:
-                root.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
-            except Exception as exc:
-                print(f"iconbitmap failed: {exc}")
-        elif photo_icon is None:
-            print(
-                "Application icon files were not found: "
-                f"{WINDOW_ICON_PATH} or {HEADER_LOGO_PATH}"
-            )
+        if remember_key:
+            branding_refs["window_icon_targets"][remember_key] = window
 
-    apply_window_icon()
+    # Apply the ICO immediately. No delayed PNG override is used.
+    apply_window_icon(root, remember_key="root")
     root.geometry("1060x760")
     root.minsize(820, 560)
-    root.after_idle(apply_window_icon)
-    root.after(250, apply_window_icon)
 
     PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1845,14 +1834,7 @@ def launch_gui():
         dialog.transient(root)
         dialog.grab_set()
 
-        try:
-            photo_icon = branding_refs.get("window_icon")
-            if photo_icon is not None:
-                dialog.iconphoto(True, photo_icon)
-            if WINDOW_ICON_PATH.is_file():
-                dialog.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
-        except Exception as exc:
-            print(f"Could not set Workshop Manager icon: {exc}")
+        apply_window_icon(dialog, remember_key="workshop_manager")
 
         original_published_id = fields["publishedfileid"].get().strip()
         remembered_published_id = (
@@ -2459,21 +2441,6 @@ def launch_gui():
 
     def update_steamcmd_visibility():
         update_workshop_summary()
-
-    theme_frame = ttk.Frame(form)
-    theme_frame.grid(row=row, column=0, columnspan=3, sticky="w", pady=(4, 0))
-    ttk.Label(theme_frame, text="Appearance").pack(side="left", padx=(0, 8))
-    theme_combo = ttk.Combobox(
-        theme_frame,
-        textvariable=fields["theme"],
-        values=["dark", "light"],
-        width=10,
-        state="readonly",
-    )
-    theme_combo.pack(side="left")
-    theme_combo.bind("<<ComboboxSelected>>", lambda _e: apply_theme())
-    ToolTip(theme_combo, hints["theme"])
-    row += 1
 
     options = ttk.LabelFrame(outer, text="Build options", padding=8)
     options.pack(fill="x", pady=(10, 0))
@@ -3814,11 +3781,7 @@ def launch_gui():
         report_window.transient(root)
         report_window.grab_set()
 
-        try:
-            if WINDOW_ICON_PATH.is_file():
-                report_window.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
-        except Exception:
-            pass
+        apply_window_icon(report_window, remember_key="validation_report")
 
         header_frame = ttk.Frame(report_window, padding=(14, 12))
         header_frame.pack(fill="x")
@@ -4437,6 +4400,240 @@ def launch_gui():
                 f"Could not open:\n{path}\n\n{exc}",
             )
 
+    def clear_build_output():
+        """Clear the visible command output without affecting saved build logs."""
+        output_box.configure(state="normal")
+        output_box.delete("1.0", "end")
+        output_box.configure(state="disabled")
+        status_var.set("Build output cleared")
+
+    def save_current_settings():
+        """Persist the current application settings and show a status update."""
+        save_settings()
+        status_var.set("Current settings saved")
+
+    def save_and_exit():
+        """Save settings before closing the application."""
+        save_settings()
+        close_application()
+
+    def copy_debug_information():
+        """Copy a compact, credential-safe diagnostics summary to the clipboard."""
+        debug_text = (
+            f"{APP_NAME}\n"
+            f"Version: {APP_VERSION}\n"
+            f"Python: {platform.python_version()}\n"
+            f"Platform: {platform.platform()}\n"
+            f"Executable: {sys.executable}\n"
+            f"Frozen build: {bool(getattr(sys, 'frozen', False))}\n"
+            f"User data: {USER_DATA_DIR}\n"
+            f"Project: {fields['project'].get().strip()}\n"
+            f"Plugin: {fields['plugin'].get().strip()}\n"
+            f"Workshop: {fields['workshop'].get().strip()}\n"
+        )
+
+        root.clipboard_clear()
+        root.clipboard_append(debug_text)
+        root.update_idletasks()
+        status_var.set("Debug information copied to clipboard")
+
+    def export_diagnostics():
+        """Export sanitized settings, history, statistics, and recent logs."""
+        destination = filedialog.asksaveasfilename(
+            parent=root,
+            title="Export diagnostics",
+            defaultextension=".zip",
+            initialfile=f"meccha_mod_builder_diagnostics_{datetime.now():%Y%m%d_%H%M%S}.zip",
+            filetypes=[("ZIP archive", "*.zip"), ("All files", "*.*")],
+        )
+
+        if not destination:
+            return
+
+        sanitized_settings = profile_payload()
+        sanitized_settings.get("fields", {}).pop("steam_login", None)
+
+        system_info = (
+            f"Application: {APP_NAME}\n"
+            f"Version: {APP_VERSION}\n"
+            f"Generated: {current_local_timestamp()}\n"
+            f"Python: {platform.python_version()}\n"
+            f"Platform: {platform.platform()}\n"
+            f"Executable: {sys.executable}\n"
+            f"Frozen build: {bool(getattr(sys, 'frozen', False))}\n"
+            f"User data directory: {USER_DATA_DIR}\n"
+        )
+
+        try:
+            with zipfile.ZipFile(
+                destination,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as archive:
+                archive.writestr("system_info.txt", system_info)
+                archive.writestr(
+                    "settings_sanitized.json",
+                    json.dumps(sanitized_settings, indent=2, ensure_ascii=False),
+                )
+                archive.writestr(
+                    "build_history.json",
+                    json.dumps(load_build_history(), indent=2, ensure_ascii=False),
+                )
+                archive.writestr(
+                    "build_statistics.json",
+                    json.dumps(load_build_statistics(), indent=2, ensure_ascii=False),
+                )
+
+                if UPDATE_SETTINGS_FILE.is_file():
+                    archive.write(UPDATE_SETTINGS_FILE, "update_settings.json")
+
+                recent_logs = sorted(
+                    BUILD_LOGS_DIR.glob("*.log"),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )[:10]
+
+                for log_path in recent_logs:
+                    archive.write(log_path, f"logs/{log_path.name}")
+
+            status_var.set("Diagnostics exported")
+            messagebox.showinfo(
+                "Export diagnostics",
+                f"Diagnostics were exported successfully:\n\n{destination}",
+                parent=root,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Export diagnostics",
+                f"Could not export diagnostics:\n\n{exc}",
+                parent=root,
+            )
+
+    def show_shortcuts():
+        messagebox.showinfo(
+            "Keyboard Shortcuts",
+            "Ctrl+B — Build Mod\n"
+            "Ctrl+Shift+V — Validate\n"
+            "Ctrl+W — Workshop Manager\n"
+            "Ctrl+H — Build History\n"
+            "Ctrl+L — Focus Build Output\n"
+            "F1 — About\n"
+            "Escape — Close supported dialogs",
+            parent=root,
+        )
+
+    def show_troubleshooting():
+        messagebox.showinfo(
+            "Troubleshooting",
+            "1. Run Validate before building.\n"
+            "2. Confirm Unreal Editor is closed.\n"
+            "3. Review Build History and the saved log.\n"
+            "4. Export Diagnostics when reporting an issue.\n"
+            "5. Verify the selected plugin and runtime map path.",
+            parent=root,
+        )
+
+    def show_release_notes():
+        messagebox.showinfo(
+            "Release Notes",
+            f"{APP_NAME} {APP_VERSION}\n\n"
+            "Recent improvements:\n"
+            "• Workshop VDF preview and item ID recovery\n"
+            "• Scrollable Workshop settings\n"
+            "• Profiles moved into the header\n"
+            "• Organized build output\n"
+            "• Application menu bar and improved icon handling",
+            parent=root,
+        )
+
+    def check_for_updates():
+        messagebox.showinfo(
+            "Check for Updates",
+            "The update-check interface is ready, but a GitHub repository URL "
+            "must be configured before online version checks can be enabled.",
+            parent=root,
+        )
+
+    def show_about():
+        about = tk.Toplevel(root)
+        about.title(f"About {APP_NAME}")
+        about.resizable(False, False)
+        about.transient(root)
+        about.grab_set()
+        apply_window_icon(about, remember_key="about")
+
+        container = ttk.Frame(about, padding=18)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(
+            container,
+            text="Universal Meccha Mod Builder",
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            container,
+            text=f"Version {APP_VERSION}",
+        ).pack(anchor="w", pady=(2, 0))
+        ttk.Label(
+            container,
+            text="Created by Limbs",
+            font=("Segoe UI", 9, "italic"),
+        ).pack(anchor="w", pady=(2, 12))
+        ttk.Label(
+            container,
+            text=(
+                "Build, package, validate, and publish custom Meccha "
+                "Chameleon maps."
+            ),
+            wraplength=430,
+            justify="left",
+        ).pack(anchor="w")
+        ttk.Label(
+            container,
+            text=(
+                "This is an independent community tool and is not affiliated "
+                "with or endorsed by the developers or publishers of Meccha "
+                "Chameleon."
+            ),
+            wraplength=430,
+            justify="left",
+        ).pack(anchor="w", pady=(10, 14))
+
+        button_row = ttk.Frame(container)
+        button_row.pack(fill="x")
+
+        ttk.Button(
+            button_row,
+            text="Open AppData",
+            command=lambda: open_path_in_windows(USER_DATA_DIR),
+        ).pack(side="left")
+        ttk.Button(
+            button_row,
+            text="Copy System Info",
+            command=copy_debug_information,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            button_row,
+            text="Close",
+            command=about.destroy,
+        ).pack(side="right")
+
+        about.bind("<Escape>", lambda _event: about.destroy())
+        apply_interactive_cursors(about)
+
+    def set_theme_from_menu(theme_name: str):
+        fields["theme"].set(theme_name)
+        apply_theme()
+        save_settings()
+
+    def reset_window_size():
+        root.geometry("1060x760")
+        status_var.set("Window size reset")
+
+    def focus_build_output():
+        output_box.focus_set()
+        output_box.see("end")
+
     def show_build_history():
         history_window = tk.Toplevel(root)
         history_window.title("Build History")
@@ -4444,11 +4641,7 @@ def launch_gui():
         history_window.minsize(820, 420)
         history_window.transient(root)
 
-        try:
-            if WINDOW_ICON_PATH.is_file():
-                history_window.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
-        except Exception:
-            pass
+        apply_window_icon(history_window, remember_key="build_history")
 
         header = ttk.Frame(
             history_window,
@@ -4743,12 +4936,159 @@ def launch_gui():
         command=refresh_plugins,
         cursor="hand2",
     ).pack(side="left", padx=8)
-    ttk.Button(
-        buttons,
-        text="Exit",
+
+    # ------------------------------------------------------------------
+    # Application menu bar
+    # ------------------------------------------------------------------
+    menu_bar = tk.Menu(root)
+
+    file_menu = tk.Menu(menu_bar, tearoff=False)
+    file_menu.add_command(
+        label="Save Current Settings",
+        accelerator="Ctrl+S",
+        command=save_current_settings,
+    )
+    file_menu.add_command(
+        label="Save Current Profile…",
+        command=save_profile,
+    )
+    file_menu.add_separator()
+    file_menu.add_command(
+        label="Export Diagnostics…",
+        command=export_diagnostics,
+    )
+    file_menu.add_command(
+        label="Open AppData Folder",
+        command=lambda: open_path_in_windows(USER_DATA_DIR),
+    )
+    file_menu.add_command(
+        label="Open Build Logs Folder",
+        command=lambda: open_path_in_windows(BUILD_LOGS_DIR),
+    )
+    file_menu.add_separator()
+    file_menu.add_command(
+        label="Save and Exit",
+        command=save_and_exit,
+    )
+    file_menu.add_command(
+        label="Exit",
         command=close_application,
-        cursor="hand2",
-    ).pack(side="right")
+    )
+    menu_bar.add_cascade(label="File", menu=file_menu)
+
+    view_menu = tk.Menu(menu_bar, tearoff=False)
+
+    appearance_menu = tk.Menu(view_menu, tearoff=False)
+    theme_menu_var = tk.StringVar(value=fields["theme"].get())
+    appearance_menu.add_radiobutton(
+        label="Dark Mode",
+        value="dark",
+        variable=theme_menu_var,
+        command=lambda: set_theme_from_menu("dark"),
+    )
+    appearance_menu.add_radiobutton(
+        label="Light Mode",
+        value="light",
+        variable=theme_menu_var,
+        command=lambda: set_theme_from_menu("light"),
+    )
+    view_menu.add_cascade(
+        label="Appearance",
+        menu=appearance_menu,
+    )
+    view_menu.add_separator()
+    view_menu.add_command(
+        label="Focus Build Output",
+        accelerator="Ctrl+L",
+        command=focus_build_output,
+    )
+    view_menu.add_command(
+        label="Clear Build Output",
+        command=clear_build_output,
+    )
+    view_menu.add_command(
+        label="Reset Window Size",
+        command=reset_window_size,
+    )
+    menu_bar.add_cascade(label="View", menu=view_menu)
+
+    tools_menu = tk.Menu(menu_bar, tearoff=False)
+    tools_menu.add_command(
+        label="Validate Configuration",
+        accelerator="Ctrl+Shift+V",
+        command=validate_only,
+    )
+    tools_menu.add_command(
+        label="Workshop Manager",
+        accelerator="Ctrl+W",
+        command=open_workshop_manager,
+    )
+    tools_menu.add_command(
+        label="Build History",
+        accelerator="Ctrl+H",
+        command=show_build_history,
+    )
+    tools_menu.add_separator()
+    tools_menu.add_command(
+        label="Open Workshop Folder",
+        command=open_workshop,
+    )
+    tools_menu.add_command(
+        label="Open Profiles Folder",
+        command=lambda: open_path_in_windows(PROFILES_DIR),
+    )
+    tools_menu.add_command(
+        label="Refresh Plugins",
+        command=refresh_plugins,
+    )
+    tools_menu.add_separator()
+
+    utility_scripts_menu = tk.Menu(tools_menu, tearoff=False)
+    utility_scripts_menu.add_command(
+        label="Utility scripts will appear here",
+        state="disabled",
+    )
+    tools_menu.add_cascade(
+        label="Utility Scripts",
+        menu=utility_scripts_menu,
+    )
+    menu_bar.add_cascade(label="Tools", menu=tools_menu)
+
+    help_menu = tk.Menu(menu_bar, tearoff=False)
+    help_menu.add_command(
+        label="Keyboard Shortcuts",
+        command=show_shortcuts,
+    )
+    help_menu.add_command(
+        label="Troubleshooting",
+        command=show_troubleshooting,
+    )
+    help_menu.add_command(
+        label="Copy Debug Information",
+        command=copy_debug_information,
+    )
+    help_menu.add_command(
+        label="Export Diagnostics…",
+        command=export_diagnostics,
+    )
+    help_menu.add_separator()
+    help_menu.add_command(
+        label="Check for Updates",
+        command=check_for_updates,
+    )
+    help_menu.add_command(
+        label="Release Notes",
+        command=show_release_notes,
+    )
+    help_menu.add_separator()
+    help_menu.add_command(
+        label=f"About {APP_NAME}",
+        accelerator="F1",
+        command=show_about,
+    )
+    menu_bar.add_cascade(label="Help", menu=help_menu)
+
+    root.configure(menu=menu_bar)
 
     def handle_build_shortcut(_event=None):
         invoke_button_if_enabled(build_button)
@@ -4774,6 +5114,11 @@ def launch_gui():
     root.bind("<Control-W>", handle_workshop_shortcut)
     root.bind("<Control-h>", handle_history_shortcut)
     root.bind("<Control-H>", handle_history_shortcut)
+    root.bind("<Control-s>", lambda _event: (save_current_settings(), "break")[1])
+    root.bind("<Control-S>", lambda _event: (save_current_settings(), "break")[1])
+    root.bind("<Control-l>", lambda _event: (focus_build_output(), "break")[1])
+    root.bind("<Control-L>", lambda _event: (focus_build_output(), "break")[1])
+    root.bind("<F1>", lambda _event: (show_about(), "break")[1])
 
     ToolTip(build_button, "Start the build (Ctrl+B).")
     ToolTip(validate_button, "Run preflight validation (Ctrl+Shift+V).")
