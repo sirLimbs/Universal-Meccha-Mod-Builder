@@ -1559,6 +1559,12 @@ def launch_gui():
             "select": "#365f9d",
             "console_bg": "#0f1216",
             "console_fg": "#dbe7ff",
+            "console_muted": "#8d98a8",
+            "console_info": "#7fb3ff",
+            "console_success": "#72d597",
+            "console_warning": "#f2c66d",
+            "console_error": "#ff7f87",
+            "console_heading": "#c7a7ff",
             "danger": "#b93f4a",
         },
         "light": {
@@ -1571,6 +1577,12 @@ def launch_gui():
             "select": "#b7d5ff",
             "console_bg": "#ffffff",
             "console_fg": "#1e2329",
+            "console_muted": "#6d7682",
+            "console_info": "#1f64b5",
+            "console_success": "#237a43",
+            "console_warning": "#9a6500",
+            "console_error": "#b4232c",
+            "console_heading": "#6741a5",
             "danger": "#b83843",
         },
     }
@@ -1637,11 +1649,28 @@ def launch_gui():
         )
 
         if "output_box" in locals_ref:
-            locals_ref["output_box"].configure(
+            console = locals_ref["output_box"]
+            console.configure(
                 background=c["console_bg"],
                 foreground=c["console_fg"],
                 insertbackground=c["fg"],
                 selectbackground=c["select"],
+            )
+            console.tag_configure("timestamp", foreground=c["console_muted"])
+            console.tag_configure("normal", foreground=c["console_fg"])
+            console.tag_configure("info", foreground=c["console_info"])
+            console.tag_configure("success", foreground=c["console_success"])
+            console.tag_configure("warning", foreground=c["console_warning"])
+            console.tag_configure("error", foreground=c["console_error"])
+            console.tag_configure(
+                "heading",
+                foreground=c["console_heading"],
+                font=("Consolas", 9, "bold"),
+            )
+            console.tag_configure(
+                "command",
+                foreground=c["console_info"],
+                font=("Consolas", 9, "bold"),
             )
 
     def load_brand_image(path: Path, max_size):
@@ -2973,6 +3002,23 @@ def launch_gui():
 
     configure_build_pipeline()
 
+    console_toolbar = ttk.Frame(output_frame)
+    console_toolbar.pack(fill="x", pady=(0, 4))
+
+    auto_scroll_var = tk.BooleanVar(value=True)
+
+    ttk.Label(
+        console_toolbar,
+        text="Live build log",
+        font=("Segoe UI", 9, "bold"),
+    ).pack(side="left")
+
+    ttk.Checkbutton(
+        console_toolbar,
+        text="Auto-scroll",
+        variable=auto_scroll_var,
+    ).pack(side="right")
+
     output_box = scrolledtext.ScrolledText(
         output_frame,
         height=12,
@@ -2982,6 +3028,39 @@ def launch_gui():
     )
     output_box.pack(fill="both", expand=True)
     locals_ref["output_box"] = output_box
+
+    console_menu = tk.Menu(output_box, tearoff=False)
+    console_menu.add_command(
+        label="Copy",
+        command=lambda: output_box.event_generate("<<Copy>>"),
+    )
+    console_menu.add_command(
+        label="Select All",
+        command=lambda: (
+            output_box.tag_add("sel", "1.0", "end-1c"),
+            output_box.mark_set("insert", "1.0"),
+            output_box.see("insert"),
+        ),
+    )
+    console_menu.add_separator()
+    console_menu.add_command(
+        label="Clear",
+        command=lambda: (
+            output_box.configure(state="normal"),
+            output_box.delete("1.0", "end"),
+            output_box.configure(state="disabled"),
+        ),
+    )
+
+    def show_console_menu(event):
+        try:
+            console_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            console_menu.grab_release()
+
+    output_box.bind("<Button-3>", show_console_menu)
+
+    apply_theme()
 
     buttons = action_host
 
@@ -3037,15 +3116,102 @@ def launch_gui():
             # Avoid recursively calling log() here.
             print(f"Could not write build log '{log_path}': {exc}")
 
+    def classify_console_line(line: str) -> str:
+        """Return the display tag used for one console line."""
+        stripped = line.strip()
+        lowered = stripped.lower()
+
+        if not stripped:
+            return "normal"
+
+        if stripped.startswith("===") and stripped.endswith("==="):
+            return "heading"
+
+        if lowered.startswith(("error", "fatal", "exception", "traceback")):
+            return "error"
+
+        if any(
+            token in lowered
+            for token in (
+                " error:",
+                "error c",
+                "failed",
+                "failure",
+                "could not",
+                "missing ",
+                "not found",
+                "recursionerror",
+            )
+        ):
+            return "error"
+
+        if lowered.startswith(("warning", "warn")) or " warning:" in lowered:
+            return "warning"
+
+        if any(
+            token in lowered
+            for token in (
+                "completed successfully",
+                "build succeeded",
+                "success",
+                "copied:",
+                "wrote vdf:",
+                "fallback located",
+            )
+        ):
+            return "success"
+
+        if stripped.startswith(("python ", '"')) or " --" in stripped:
+            return "command"
+
+        if lowered.startswith(
+            (
+                "build id:",
+                "log file:",
+                "elapsed:",
+                "estimated",
+                "skipping ",
+                "copy-only mode",
+            )
+        ):
+            return "info"
+
+        return "normal"
+
     def log(text):
+        """
+        Append raw text to the persistent log and a timestamped, color-classified
+        representation to the visible console.
+        """
         text = str(text)
+        append_to_active_log(text)
 
         output_box.configure(state="normal")
-        output_box.insert("end", text)
-        output_box.see("end")
-        output_box.configure(state="disabled")
 
-        append_to_active_log(text)
+        for line in text.splitlines(keepends=True):
+            has_newline = line.endswith(("\n", "\r"))
+            visible_line = line.rstrip("\r\n")
+            timestamp = datetime.now().strftime("[%H:%M:%S] ")
+
+            output_box.insert("end", timestamp, ("timestamp",))
+            output_box.insert(
+                "end",
+                visible_line,
+                (classify_console_line(visible_line),),
+            )
+
+            if has_newline:
+                output_box.insert("end", "\n", ("normal",))
+
+        if text and not text.endswith(("\n", "\r")):
+            # Preserve the old behavior for partial messages without forcing a
+            # newline that was not present in the source stream.
+            pass
+
+        if auto_scroll_var.get():
+            output_box.see("end")
+
+        output_box.configure(state="disabled")
 
     def update_build_timing_display():
         """Refresh elapsed, estimated, and remaining build time."""
