@@ -99,6 +99,81 @@ def save_json_file(path: Path, data):
 
     temporary_path.replace(path)
 
+def current_local_timestamp() -> str:
+    """Return the current local date and time in ISO format."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+def create_build_id() -> str:
+    """
+    Create a sortable ID that is unique enough for local build history.
+
+    Example:
+        20260719_214530_482193
+    """
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+def load_build_history() -> list[dict]:
+    """Load persistent build history from disk."""
+    data = load_json_file(BUILD_HISTORY_FILE, [])
+
+    if not isinstance(data, list):
+        return []
+
+    return [
+        record
+        for record in data
+        if isinstance(record, dict)
+    ]
+
+def save_build_history(records: list[dict]) -> None:
+    """
+    Save build history while limiting the file to the newest 500 records.
+    """
+    limited_records = records[-500:]
+    save_json_file(BUILD_HISTORY_FILE, limited_records)
+
+def save_build_history(records: list[dict]) -> None:
+    """
+    Save build history while limiting the file to the newest 500 records.
+    """
+    limited_records = records[-500:]
+    save_json_file(BUILD_HISTORY_FILE, limited_records)
+
+def calculate_duration_seconds(started_at: datetime | None) -> float | None:
+    """Calculate elapsed seconds from a datetime value."""
+    if started_at is None:
+        return None
+
+    elapsed = datetime.now().astimezone() - started_at
+    return round(max(0.0, elapsed.total_seconds()), 2)
+
+def append_build_history_record(record: dict) -> None:
+    """Add a new build-history record."""
+    records = load_build_history()
+    records.append(record)
+    save_build_history(records)
+
+def format_duration(seconds) -> str:
+    """Format a duration as seconds, minutes, or hours."""
+    if seconds is None:
+        return "—"
+
+    try:
+        total_seconds = max(0, int(round(float(seconds))))
+    except (TypeError, ValueError):
+        return "—"
+
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+
+    if minutes:
+        return f"{minutes}m {seconds}s"
+
+    return f"{seconds}s"
+
 def validation_result(level: str, title: str, details: str = "") -> dict:
     """
     Create a standardized preflight validation result.
@@ -422,6 +497,33 @@ def newest_files(root: Path, suffixes):
                 files.append(file)
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
+
+def mark_interrupted_builds() -> int:
+    """
+    Mark unfinished records from previous sessions as interrupted.
+
+    Returns the number of records changed.
+    """
+    records = load_build_history()
+    changed = 0
+    recovery_time = current_local_timestamp()
+
+    for record in records:
+        if record.get("status") == "running":
+            record.update({
+                "status": "interrupted",
+                "finished_at": recovery_time,
+                "error": (
+                    "The application ended before this build recorded "
+                    "a normal completion state."
+                ),
+            })
+            changed += 1
+
+    if changed:
+        save_build_history(records)
+
+    return changed
 
 def to_vdf_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "\\\\")
@@ -819,6 +921,9 @@ def launch_gui():
 
     root = tk.Tk()
     root.title(f"Universal Meccha Mod Builder v{APP_VERSION}")
+
+    interrupted_build_count = mark_interrupted_builds()
+
 
     def apply_window_icon():
         try:
@@ -1286,6 +1391,11 @@ def launch_gui():
     status_frame = ttk.Frame(outer)
     status_frame.pack(fill="x", pady=(10, 4))
     status_var = tk.StringVar(value="Ready")
+    if interrupted_build_count:
+        status_var.set(
+            f"Recovered {interrupted_build_count} interrupted build record(s)"
+        )
+
     ttk.Label(status_frame, textvariable=status_var).pack(side="left")
     progress = ttk.Progressbar(status_frame, mode="indeterminate", length=180)
     progress.pack(side="right")
@@ -1299,13 +1409,211 @@ def launch_gui():
     buttons = action_host
 
     messages = queue.Queue()
-    process_holder = {"process": None}
+
+    process_holder = {
+        "process": None,
+    }
+
+    build_state = {
+        "id": None,
+        "log_path": None,
+        "started_at": None,
+        "cancel_requested": False,
+        "record_active": False,
+    }
+
+    def redact_command_for_log(cmd: list[str]) -> list[str]:
+        """
+        Return a safe copy of the command with Steam credentials removed.
+        """
+        safe_cmd = [str(part) for part in cmd]
+
+        for index, part in enumerate(safe_cmd):
+            if part == "--steam-login" and index + 1 < len(safe_cmd):
+                safe_cmd[index + 1] = "[REDACTED]"
+
+        return safe_cmd
+
+    def append_to_active_log(text: str) -> None:
+        """Append text to the currently active build log."""
+        log_path = build_state.get("log_path")
+
+        if not build_state.get("record_active") or log_path is None:
+            return
+
+        try:
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+
+            with Path(log_path).open(
+                "a",
+                encoding="utf-8",
+                errors="replace",
+            ) as log_file:
+                log_file.write(text)
+                log_file.flush()
+
+        except OSError as exc:
+            # Avoid recursively calling log() here.
+            print(f"Could not write build log '{log_path}': {exc}")
 
     def log(text):
+        text = str(text)
+
         output_box.configure(state="normal")
         output_box.insert("end", text)
         output_box.see("end")
         output_box.configure(state="disabled")
+
+        append_to_active_log(text)
+
+    def create_build_snapshot() -> dict:
+        """
+        Capture the configuration used by a build.
+
+        Steam login arguments are deliberately excluded.
+        """
+        return {
+            "ue": fields["ue"].get().strip(),
+            "project": fields["project"].get().strip(),
+            "plugin": fields["plugin"].get().strip(),
+            "map": fields["map"].get().strip(),
+            "release": fields["release"].get().strip(),
+            "workshop": fields["workshop"].get().strip(),
+            "preview": fields["preview"].get().strip(),
+            "appid": fields["appid"].get().strip(),
+            "publishedfileid": fields["publishedfileid"].get().strip(),
+            "visibility": fields["visibility"].get().strip(),
+            "title": fields["title"].get(),
+            "description": fields["description"].get(),
+            "changenote": fields["changenote"].get(),
+            "steamcmd": fields["steamcmd"].get().strip(),
+            "flags": {
+                key: bool(variable.get())
+                for key, variable in flags.items()
+            },
+        }
+
+    def begin_build_record(cmd: list[str]) -> Path:
+        """Create the build-history record and its log file."""
+        build_id = create_build_id()
+        started_at = datetime.now().astimezone()
+
+        plugin_name = fields["plugin"].get().strip() or "UnknownPlugin"
+        safe_plugin_name = re.sub(
+            r"[^A-Za-z0-9._-]+",
+            "_",
+            plugin_name,
+        ).strip("._")
+
+        if not safe_plugin_name:
+            safe_plugin_name = "UnknownPlugin"
+
+        log_filename = f"{build_id}_{safe_plugin_name}.log"
+        log_path = BUILD_LOGS_DIR / log_filename
+
+        build_state.update({
+            "id": build_id,
+            "log_path": log_path,
+            "started_at": started_at,
+            "cancel_requested": False,
+            "record_active": True,
+        })
+
+        safe_command = redact_command_for_log(cmd)
+        safe_command_text = subprocess.list2cmdline(safe_command)
+
+        record = {
+            "id": build_id,
+            "app_version": APP_VERSION,
+            "status": "running",
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "finished_at": None,
+            "duration_seconds": None,
+            "exit_code": None,
+            "error": "",
+            "log_path": str(log_path),
+            "command": safe_command_text,
+            "configuration": create_build_snapshot(),
+        }
+
+        append_build_history_record(record)
+
+        log_header = (
+            "============================================================\n"
+            f"{APP_NAME} Build Log\n"
+            "============================================================\n"
+            f"Build ID:       {build_id}\n"
+            f"App Version:    {APP_VERSION}\n"
+            f"Started:        {record['started_at']}\n"
+            f"Plugin:         {record['configuration']['plugin']}\n"
+            f"Map:            {record['configuration']['map']}\n"
+            f"Release:        {record['configuration']['release']}\n"
+            f"Workshop:       {record['configuration']['workshop']}\n"
+            f"Published ID:   {record['configuration']['publishedfileid']}\n"
+            "\n"
+            "=== GUI COMMAND ===\n"
+            f"{safe_command_text}\n\n"
+        )
+
+        append_to_active_log(log_header)
+
+        return log_path
+
+    def finish_build_record(
+        status: str,
+        exit_code: int | None = None,
+        error: str = "",
+    ) -> None:
+        """Finish the active history record and close its logging lifecycle."""
+        build_id = build_state.get("id")
+
+        if not build_id or not build_state.get("record_active"):
+            return
+
+        finished_at = datetime.now().astimezone()
+        duration_seconds = calculate_duration_seconds(
+            build_state.get("started_at")
+        )
+
+        completion_text = (
+            "\n"
+            "============================================================\n"
+            "BUILD FINISHED\n"
+            "============================================================\n"
+            f"Status:         {status}\n"
+            f"Finished:       {finished_at.isoformat(timespec='seconds')}\n"
+            f"Duration:       {format_duration(duration_seconds)}\n"
+            f"Exit code:      "
+            f"{exit_code if exit_code is not None else 'N/A'}\n"
+        )
+
+        if error:
+            completion_text += f"Error:          {error}\n"
+
+        append_to_active_log(completion_text)
+
+        update_build_history_record(
+            build_id,
+            {
+                "status": status,
+                "finished_at": finished_at.isoformat(timespec="seconds"),
+                "duration_seconds": duration_seconds,
+                "exit_code": exit_code,
+                "error": str(error),
+            },
+        )
+
+        build_state["record_active"] = False
+
+    def reset_active_build_state() -> None:
+        """Clear transient build state after completion."""
+        build_state.update({
+            "id": None,
+            "log_path": None,
+            "started_at": None,
+            "cancel_requested": False,
+            "record_active": False,
+        })
 
     def refresh_plugins():
         plugins = []
@@ -2352,7 +2660,18 @@ def launch_gui():
         output_box.configure(state="disabled")
 
         cmd = build_command()
-        log("=== GUI COMMAND ===\n" + subprocess.list2cmdline(cmd) + "\n\n")
+        log_path = begin_build_record(cmd)
+
+        # Display the same safe header already written to the persistent log.
+        safe_command = redact_command_for_log(cmd)
+
+        log(
+            "=== BUILD HISTORY ===\n"
+            f"Build ID: {build_state['id']}\n"
+            f"Log file: {log_path}\n\n"
+            "=== GUI COMMAND ===\n"
+            f"{subprocess.list2cmdline(safe_command)}\n\n"
+        )
 
         try:
             process = subprocess.Popen(
@@ -2363,8 +2682,22 @@ def launch_gui():
                 bufsize=1,
                 universal_newlines=True,
             )
+
         except Exception as exc:
-            messagebox.showerror("Failed to start", str(exc))
+            error_text = str(exc)
+
+            finish_build_record(
+                status="launch_error",
+                exit_code=None,
+                error=error_text,
+            )
+
+            reset_active_build_state()
+
+            messagebox.showerror(
+                "Failed to start",
+                error_text,
+            )
             return
 
         process_holder["process"] = process
@@ -2375,11 +2708,62 @@ def launch_gui():
         status_var.set("Building…")
         threading.Thread(target=reader_thread, args=(process,), daemon=True).start()
 
+    def close_application():
+        process = process_holder.get("process")
+
+        if process and process.poll() is None:
+            should_close = messagebox.askyesno(
+                "Build in progress",
+                (
+                    "A build is currently running.\n\n"
+                    "Closing the application will terminate it and mark the "
+                    "build as cancelled.\n\n"
+                    "Close anyway?"
+                ),
+            )
+
+            if not should_close:
+                return
+
+            build_state["cancel_requested"] = True
+
+            try:
+                process.terminate()
+            except Exception:
+                pass
+
+            finish_build_record(
+                status="cancelled",
+                exit_code=None,
+                error="Application closed while the build was running.",
+            )
+
+        root.destroy()
+
     def cancel_build():
         process = process_holder["process"]
+
         if process and process.poll() is None:
-            process.terminate()
-            status_var.set("Stopping…")
+            build_state["cancel_requested"] = True
+
+            log(
+                "\n=== CANCELLATION REQUESTED ===\n"
+                f"{current_local_timestamp()}\n\n"
+            )
+
+            try:
+                process.terminate()
+                status_var.set("Stopping…")
+                cancel_button.configure(state="disabled")
+
+            except Exception as exc:
+                build_state["cancel_requested"] = False
+                log(f"Could not terminate build process: {exc}\n")
+
+                messagebox.showerror(
+                    "Cancel build",
+                    f"Could not stop the build:\n\n{exc}",
+                )
 
     def poll_queue():
         try:
@@ -2393,27 +2777,354 @@ def launch_gui():
                     validate_button.configure(state="normal")
                     cancel_button.configure(state="disabled")
                     process_holder["process"] = None
-                    if value == 0:
-                        status_var.set("Build completed successfully")
-                        messagebox.showinfo("Meccha builder", "Build completed successfully.")
+
+                    was_cancelled = bool(
+                        build_state.get("cancel_requested")
+                    )
+
+                    if was_cancelled:
+                        finish_build_record(
+                            status="cancelled",
+                            exit_code=value,
+                        )
+
+                        status_var.set("Build cancelled")
+
+                        messagebox.showwarning(
+                            "Meccha builder",
+                            "The build was cancelled.\n\n"
+                            f"Log saved to:\n{build_state['log_path']}",
+                        )
+
+                    elif value == 0:
+                        finish_build_record(
+                            status="success",
+                            exit_code=value,
+                        )
+
+                        status_var.set(
+                            "Build completed successfully"
+                        )
+
+                        messagebox.showinfo(
+                            "Meccha builder",
+                            "Build completed successfully.\n\n"
+                            f"Log saved to:\n{build_state['log_path']}",
+                        )
+
                     else:
-                        status_var.set(f"Build failed with exit code {value}")
+                        finish_build_record(
+                            status="failed",
+                            exit_code=value,
+                            error=f"Process exited with code {value}",
+                        )
+
+                        status_var.set(
+                            f"Build failed with exit code {value}"
+                        )
+
                         messagebox.showerror(
                             "Meccha builder",
-                            f"Build failed with exit code {value}.\nReview the log.",
+                            f"Build failed with exit code {value}.\n"
+                            "Review the log.\n\n"
+                            f"Log saved to:\n{build_state['log_path']}",
                         )
+
+                    reset_active_build_state()
+
                 elif kind == "error":
                     progress.stop()
                     build_button.configure(state="normal")
                     validate_button.configure(state="normal")
                     cancel_button.configure(state="disabled")
                     process_holder["process"] = None
+
+                    error_text = str(value)
+                    log_path = build_state.get("log_path")
+
+                    finish_build_record(
+                        status="failed",
+                        exit_code=None,
+                        error=error_text,
+                    )
+
                     status_var.set("Build failed")
-                    messagebox.showerror("Meccha builder", value)
+
+                    messagebox.showerror(
+                        "Meccha builder",
+                        f"{error_text}\n\n"
+                        f"Log saved to:\n{log_path}",
+                    )
+
+                    reset_active_build_state()
+
         except queue.Empty:
             pass
         root.after(100, poll_queue)
 
+    def open_path_in_windows(path: Path) -> None:
+        """Open a file or folder using the Windows shell."""
+        path = Path(path).expanduser()
+
+        if not path.exists():
+            messagebox.showwarning(
+                "Open path",
+                f"The path does not exist:\n\n{path}",
+            )
+            return
+
+        try:
+            os.startfile(str(path))
+        except Exception as exc:
+            messagebox.showerror(
+                "Open path",
+                f"Could not open:\n{path}\n\n{exc}",
+            )
+
+    def show_build_history():
+        history_window = tk.Toplevel(root)
+        history_window.title("Build History")
+        history_window.geometry("1050x560")
+        history_window.minsize(820, 420)
+        history_window.transient(root)
+
+        try:
+            if WINDOW_ICON_PATH.is_file():
+                history_window.iconbitmap(
+                    default=str(WINDOW_ICON_PATH.resolve())
+                )
+        except Exception:
+            pass
+
+        header = ttk.Frame(
+            history_window,
+            padding=(12, 12, 12, 6),
+        )
+        header.pack(fill="x")
+
+        ttk.Label(
+            header,
+            text="Build History",
+            font=("Segoe UI", 16, "bold"),
+        ).pack(side="left")
+
+        history_count_var = tk.StringVar()
+        ttk.Label(
+            header,
+            textvariable=history_count_var,
+        ).pack(side="right")
+
+        table_frame = ttk.Frame(
+            history_window,
+            padding=(12, 6),
+        )
+        table_frame.pack(fill="both", expand=True)
+
+        columns = (
+            "started",
+            "status",
+            "plugin",
+            "release",
+            "duration",
+            "exit_code",
+        )
+
+        tree = ttk.Treeview(
+            table_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+        )
+
+        tree.heading("started", text="Started")
+        tree.heading("status", text="Status")
+        tree.heading("plugin", text="Plugin")
+        tree.heading("release", text="Release")
+        tree.heading("duration", text="Duration")
+        tree.heading("exit_code", text="Exit Code")
+
+        tree.column("started", width=190, anchor="w")
+        tree.column("status", width=100, anchor="center")
+        tree.column("plugin", width=220, anchor="w")
+        tree.column("release", width=90, anchor="center")
+        tree.column("duration", width=100, anchor="center")
+        tree.column("exit_code", width=85, anchor="center")
+
+        scrollbar = ttk.Scrollbar(
+            table_frame,
+            orient="vertical",
+            command=tree.yview,
+        )
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
+
+        record_lookup = {}
+
+        def refresh_history_table():
+            tree.delete(*tree.get_children())
+            record_lookup.clear()
+
+            records = load_build_history()
+            newest_first = list(reversed(records))
+
+            for record in newest_first:
+                build_id = str(record.get("id", ""))
+
+                if not build_id:
+                    continue
+
+                configuration = record.get("configuration", {})
+
+                if not isinstance(configuration, dict):
+                    configuration = {}
+
+                started = str(record.get("started_at", ""))
+                started_display = started.replace("T", " ")[:19]
+
+                exit_code = record.get("exit_code")
+
+                if exit_code is None:
+                    exit_code_display = "—"
+                else:
+                    exit_code_display = str(exit_code)
+
+                tree.insert(
+                    "",
+                    "end",
+                    iid=build_id,
+                    values=(
+                        started_display,
+                        str(record.get("status", "unknown")).title(),
+                        configuration.get("plugin", ""),
+                        configuration.get("release", ""),
+                        format_duration(
+                            record.get("duration_seconds")
+                        ),
+                        exit_code_display,
+                    ),
+                )
+
+                record_lookup[build_id] = record
+
+            history_count_var.set(
+                f"{len(record_lookup)} build(s)"
+            )
+
+        def selected_record() -> dict | None:
+            selection = tree.selection()
+
+            if not selection:
+                messagebox.showwarning(
+                    "Build History",
+                    "Select a build first.",
+                    parent=history_window,
+                )
+                return None
+
+            return record_lookup.get(selection[0])
+
+        def open_selected_log():
+            record = selected_record()
+
+            if record is None:
+                return
+
+            log_path_text = str(record.get("log_path", "")).strip()
+
+            if not log_path_text:
+                messagebox.showwarning(
+                    "Build History",
+                    "This build does not have a log path.",
+                    parent=history_window,
+                )
+                return
+
+            open_path_in_windows(Path(log_path_text))
+
+        def show_selected_details():
+            record = selected_record()
+
+            if record is None:
+                return
+
+            configuration = record.get("configuration", {})
+
+            if not isinstance(configuration, dict):
+                configuration = {}
+
+            details = (
+                f"Build ID: {record.get('id', '')}\n"
+                f"Status: {record.get('status', '')}\n"
+                f"Started: {record.get('started_at', '')}\n"
+                f"Finished: {record.get('finished_at') or '—'}\n"
+                f"Duration: "
+                f"{format_duration(record.get('duration_seconds'))}\n"
+                f"Exit code: "
+                f"{record.get('exit_code') if record.get('exit_code') is not None else '—'}\n\n"
+                f"Project:\n{configuration.get('project', '')}\n\n"
+                f"Plugin:\n{configuration.get('plugin', '')}\n\n"
+                f"Map:\n{configuration.get('map', '')}\n\n"
+                f"Workshop:\n{configuration.get('workshop', '')}\n\n"
+                f"Published ID:\n"
+                f"{configuration.get('publishedfileid', '')}\n\n"
+                f"Log:\n{record.get('log_path', '')}"
+            )
+
+            error_text = str(record.get("error", "")).strip()
+
+            if error_text:
+                details += f"\n\nError:\n{error_text}"
+
+            messagebox.showinfo(
+                "Build Details",
+                details,
+                parent=history_window,
+            )
+
+        button_frame = ttk.Frame(
+            history_window,
+            padding=(12, 6, 12, 12),
+        )
+        button_frame.pack(fill="x")
+
+        ttk.Button(
+            button_frame,
+            text="Refresh",
+            command=refresh_history_table,
+        ).pack(side="left")
+
+        ttk.Button(
+            button_frame,
+            text="Build Details",
+            command=show_selected_details,
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(
+            button_frame,
+            text="Open Selected Log",
+            command=open_selected_log,
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(
+            button_frame,
+            text="Open Logs Folder",
+            command=lambda: open_path_in_windows(BUILD_LOGS_DIR),
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(
+            button_frame,
+            text="Close",
+            command=history_window.destroy,
+        ).pack(side="right")
+
+        tree.bind(
+            "<Double-1>",
+            lambda _event: open_selected_log(),
+        )
+
+        refresh_history_table()
 
     def open_workshop():
         path = fields["workshop"].get().strip()
@@ -2433,8 +3144,17 @@ def launch_gui():
     cancel_button = ttk.Button(buttons, text="Cancel", command=cancel_build, state="disabled")
     cancel_button.pack(side="left", padx=8)
     ttk.Button(buttons, text="Open Workshop Folder", command=open_workshop).pack(side="left")
+    ttk.Button(
+        buttons,
+        text="Build History",
+        command=show_build_history,
+    ).pack(side="left", padx=(8, 0))
     ttk.Button(buttons, text="Refresh Plugins", command=refresh_plugins).pack(side="left", padx=8)
-    ttk.Button(buttons, text="Exit", command=root.destroy).pack(side="right")
+    ttk.Button(
+        buttons,
+        text="Exit",
+        command=close_application,
+    ).pack(side="right")
 
     project_entry.bind("<FocusOut>", lambda _event: refresh_plugins(), add="+")
     refresh_profiles()
@@ -2443,6 +3163,8 @@ def launch_gui():
     apply_hardcoded_branding()
     update_steamcmd_visibility()
     poll_queue()
+
+    root.protocol("WM_DELETE_WINDOW", close_application)
     root.mainloop()
 
 
