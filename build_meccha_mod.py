@@ -1,3 +1,7 @@
+# =============================================================================
+# Imports
+# =============================================================================
+
 import argparse
 import json
 import os
@@ -10,10 +14,15 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+# =============================================================================
+# Application constants and persistent paths
+# =============================================================================
+
 APP_NAME = "Meccha Mod Builder"
 APP_VERSION = "1.2.0-dev"
 
 MECCHA_APP_ID = "4704690"  # DO NOT CHANGE
+
 
 def user_data_dir() -> Path:
     """
@@ -50,6 +59,7 @@ PREVIEWS_DIR = USER_DATA_DIR / "previews"
 
 GUI_SETTINGS_VERSION = 3
 
+
 def ensure_user_data_directories():
     """Create all persistent application directories if they do not exist."""
     directories = [
@@ -66,6 +76,7 @@ def ensure_user_data_directories():
 
 
 ensure_user_data_directories()
+
 
 def load_json_file(path: Path, default):
     """
@@ -99,9 +110,16 @@ def save_json_file(path: Path, data):
 
     temporary_path.replace(path)
 
+
+# =============================================================================
+# Build history and timing statistics
+# =============================================================================
+
+
 def current_local_timestamp() -> str:
     """Return the current local date and time in ISO format."""
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
 
 def create_build_id() -> str:
     """
@@ -112,6 +130,7 @@ def create_build_id() -> str:
     """
     return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
+
 def load_build_history() -> list[dict]:
     """Load persistent build history from disk."""
     data = load_json_file(BUILD_HISTORY_FILE, [])
@@ -119,11 +138,8 @@ def load_build_history() -> list[dict]:
     if not isinstance(data, list):
         return []
 
-    return [
-        record
-        for record in data
-        if isinstance(record, dict)
-    ]
+    return [record for record in data if isinstance(record, dict)]
+
 
 def save_build_history(records: list[dict]) -> None:
     """
@@ -132,12 +148,6 @@ def save_build_history(records: list[dict]) -> None:
     limited_records = records[-500:]
     save_json_file(BUILD_HISTORY_FILE, limited_records)
 
-def save_build_history(records: list[dict]) -> None:
-    """
-    Save build history while limiting the file to the newest 500 records.
-    """
-    limited_records = records[-500:]
-    save_json_file(BUILD_HISTORY_FILE, limited_records)
 
 def calculate_duration_seconds(started_at: datetime | None) -> float | None:
     """Calculate elapsed seconds from a datetime value."""
@@ -146,6 +156,7 @@ def calculate_duration_seconds(started_at: datetime | None) -> float | None:
 
     elapsed = datetime.now().astimezone() - started_at
     return round(max(0.0, elapsed.total_seconds()), 2)
+
 
 def append_build_history_record(record: dict) -> None:
     """Add a new build-history record."""
@@ -176,6 +187,7 @@ def update_build_history_record(
         save_build_history(records)
 
     return record_found
+
 
 def classify_build_mode(configuration: dict) -> str:
     """
@@ -217,6 +229,7 @@ def classify_build_mode(configuration: dict) -> str:
 
     return base_mode
 
+
 def describe_build_mode(mode: str) -> str:
     """Convert an internal build mode key into a readable label."""
     labels = {
@@ -235,6 +248,7 @@ def describe_build_mode(mode: str) -> str:
 
     return labels.get(mode, mode.replace("_", " ").title())
 
+
 def default_build_statistics() -> dict:
     """Return the initial build-statistics structure."""
     return {
@@ -242,6 +256,7 @@ def default_build_statistics() -> dict:
         "updated_at": None,
         "modes": {},
     }
+
 
 def load_build_statistics() -> dict:
     """Load persisted build timing statistics."""
@@ -261,10 +276,12 @@ def load_build_statistics() -> dict:
 
     return data
 
+
 def save_build_statistics(statistics: dict) -> None:
     """Save build timing statistics."""
     statistics["updated_at"] = current_local_timestamp()
     save_json_file(BUILD_STATISTICS_FILE, statistics)
+
 
 def calculate_median(values: list[float]) -> float | None:
     """Return the median of numeric values without external dependencies."""
@@ -289,9 +306,8 @@ def calculate_median(values: list[float]) -> float | None:
     if count % 2:
         return cleaned[midpoint]
 
-    return (
-        cleaned[midpoint - 1] + cleaned[midpoint]
-    ) / 2
+    return (cleaned[midpoint - 1] + cleaned[midpoint]) / 2
+
 
 def rebuild_build_statistics() -> dict:
     """
@@ -330,20 +346,16 @@ def rebuild_build_statistics() -> dict:
         statistics["modes"][mode] = {
             "sample_count": len(recent_durations),
             "median_seconds": (
-                round(median_duration, 2)
-                if median_duration is not None
-                else None
+                round(median_duration, 2) if median_duration is not None else None
             ),
             "minimum_seconds": round(min(recent_durations), 2),
             "maximum_seconds": round(max(recent_durations), 2),
-            "recent_durations": [
-                round(value, 2)
-                for value in recent_durations
-            ],
+            "recent_durations": [round(value, 2) for value in recent_durations],
         }
 
     save_build_statistics(statistics)
     return statistics
+
 
 def get_build_time_estimate(
     configuration: dict,
@@ -388,6 +400,7 @@ def get_build_time_estimate(
         "estimated_seconds": median_seconds,
     }
 
+
 def format_duration(seconds) -> str:
     """Format a duration as seconds, minutes, or hours."""
     if seconds is None:
@@ -408,6 +421,12 @@ def format_duration(seconds) -> str:
         return f"{minutes}m {seconds}s"
 
     return f"{seconds}s"
+
+
+# =============================================================================
+# Preflight validation and Unreal project inspection
+# =============================================================================
+
 
 def validation_result(level: str, title: str, details: str = "") -> dict:
     """
@@ -438,6 +457,7 @@ def count_validation_results(results: list[dict]) -> dict:
         "error": sum(result["level"] == "error" for result in results),
     }
 
+
 def detect_unreal_version(run_uat_path: Path) -> str:
     """
     Attempt to determine the Unreal Engine version from the RunUAT path.
@@ -459,6 +479,7 @@ def detect_unreal_version(run_uat_path: Path) -> str:
 
     return ""
 
+
 def inspect_json_descriptor(path: Path) -> tuple[dict | None, str]:
     """
     Load a JSON-based Unreal descriptor such as .uproject or .uplugin.
@@ -479,9 +500,9 @@ def inspect_json_descriptor(path: Path) -> tuple[dict | None, str]:
 
     except json.JSONDecodeError as exc:
         return None, (
-            f"Invalid JSON at line {exc.lineno}, column {exc.colno}: "
-            f"{exc.msg}"
+            f"Invalid JSON at line {exc.lineno}, column {exc.colno}: " f"{exc.msg}"
         )
+
 
 def find_map_candidates(
     project: Path,
@@ -519,12 +540,11 @@ def find_map_candidates(
             continue
 
     unique_candidates = {
-        candidate.resolve()
-        for candidate in candidates
-        if candidate.is_file()
+        candidate.resolve() for candidate in candidates if candidate.is_file()
     }
 
     return sorted(unique_candidates, key=lambda path: str(path).lower())
+
 
 def find_running_unreal_processes() -> list[str]:
     """
@@ -573,6 +593,7 @@ def find_running_unreal_processes() -> list[str]:
 
     return sorted(running, key=str.lower)
 
+
 def find_recent_unreal_recovery_files(
     project: Path,
     plugin_name: str = "",
@@ -594,10 +615,12 @@ def find_recent_unreal_recovery_files(
     if plugin_name:
         plugin_saved = project_root / "Plugins" / plugin_name / "Saved"
 
-        search_roots.extend([
-            plugin_saved / "Autosaves",
-            plugin_saved / "Backup",
-        ])
+        search_roots.extend(
+            [
+                plugin_saved / "Autosaves",
+                plugin_saved / "Backup",
+            ]
+        )
 
     candidate_suffixes = {
         ".autosave",
@@ -618,10 +641,10 @@ def find_recent_unreal_recovery_files(
 
                 # Unreal autosave folders commonly contain .uasset and .umap
                 # recovery copies in addition to explicitly temporary files.
-                if (
-                    path.suffix.lower() in candidate_suffixes
-                    or path.suffix.lower() in {".uasset", ".umap"}
-                ):
+                if path.suffix.lower() in candidate_suffixes or path.suffix.lower() in {
+                    ".uasset",
+                    ".umap",
+                }:
                     candidates.append(path)
         except OSError:
             continue
@@ -635,6 +658,7 @@ def find_recent_unreal_recovery_files(
     candidates.sort(key=modified_time, reverse=True)
 
     return candidates[:maximum_results]
+
 
 def describe_file_age(path: Path) -> str:
     """Return a short human-readable description of a file's age."""
@@ -662,6 +686,12 @@ def describe_file_age(path: Path) -> str:
     days = hours // 24
     return f"{days} day(s) ago"
 
+
+# =============================================================================
+# Resource paths and general filesystem helpers
+# =============================================================================
+
+
 def resource_path(*parts: str) -> Path:
     """
     Return a resource path that works both as a normal Python script
@@ -680,6 +710,7 @@ HEADER_LOGO_PATH = resource_path("icon", "icon.png")
 
 APP_ICON_FILE = WINDOW_ICON_PATH
 APP_LOGO_FILE = HEADER_LOGO_PATH
+
 
 def run(cmd, cwd=None):
     print("\n=== RUNNING ===")
@@ -745,20 +776,28 @@ def mark_interrupted_builds() -> int:
 
     for record in records:
         if record.get("status") == "running":
-            record.update({
-                "status": "interrupted",
-                "finished_at": recovery_time,
-                "error": (
-                    "The application ended before this build recorded "
-                    "a normal completion state."
-                ),
-            })
+            record.update(
+                {
+                    "status": "interrupted",
+                    "finished_at": recovery_time,
+                    "error": (
+                        "The application ended before this build recorded "
+                        "a normal completion state."
+                    ),
+                }
+            )
             changed += 1
 
     if changed:
         save_build_history(records)
 
     return changed
+
+
+# =============================================================================
+# Steam Workshop VDF and payload helpers
+# =============================================================================
+
 
 def to_vdf_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "\\\\")
@@ -768,9 +807,18 @@ def escape_vdf_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def write_vdf(vdf_path_out, appid, publishedfileid, contentfolder, previewfile,
-              title, description, changenote, visibility):
-    text = f'''\"workshopitem\"
+def write_vdf(
+    vdf_path_out,
+    appid,
+    publishedfileid,
+    contentfolder,
+    previewfile,
+    title,
+    description,
+    changenote,
+    visibility,
+):
+    text = f"""\"workshopitem\"
 {{
     \"appid\"                 \"{escape_vdf_value(appid)}\"
     \"publishedfileid\"       \"{escape_vdf_value(publishedfileid)}\"
@@ -781,7 +829,7 @@ def write_vdf(vdf_path_out, appid, publishedfileid, contentfolder, previewfile,
     \"description\"           \"{escape_vdf_value(description)}\"
     \"changenote\"            \"{escape_vdf_value(changenote)}\"
 }}
-'''
+"""
     vdf_path_out.write_text(text, encoding="utf-8")
     print(f"Wrote VDF: {vdf_path_out}")
 
@@ -815,9 +863,7 @@ def validate_map_path(map_path: str, plugin_name: str):
             "Use: /Game/Mods/UserMap01/MyCustomMap"
         )
     if "." in map_path.rsplit("/", 1)[-1]:
-        raise ValueError(
-            f"Use package path only, not Object.Object syntax: {map_path}"
-        )
+        raise ValueError(f"Use package path only, not Object.Object syntax: {map_path}")
 
     if map_path.startswith("/Game/Mods/UserMap01/"):
         print("\nMap path matches Meccha's confirmed runtime folder:")
@@ -845,23 +891,54 @@ def validate_plugin(project_root: Path, plugin_name: str):
     return plugin_root
 
 
+# =============================================================================
+# Unreal build and payload discovery
+# =============================================================================
+
+
 def build_full_game(ue, project, project_root, release):
-    run([
-        str(ue), "BuildCookRun", f"-project={project}", "-noP4",
-        "-platform=Win64", "-clientconfig=Development", "-build", "-cook",
-        "-stage", "-pak", "-compressed",
-        f"-createReleaseVersion={release}", "-utf8output",
-    ], cwd=project_root)
+    run(
+        [
+            str(ue),
+            "BuildCookRun",
+            f"-project={project}",
+            "-noP4",
+            "-platform=Win64",
+            "-clientconfig=Development",
+            "-build",
+            "-cook",
+            "-stage",
+            "-pak",
+            "-compressed",
+            f"-createReleaseVersion={release}",
+            "-utf8output",
+        ],
+        cwd=project_root,
+    )
 
 
 def build_mod_dlc(ue, project, project_root, plugin_name, release, map_path):
-    run([
-        str(ue), "BuildCookRun", f"-project={project}", "-noP4",
-        "-platform=Win64", "-clientconfig=Development", "-build", "-cook",
-        "-stage", "-pak", "-compressed", f"-dlcName={plugin_name}",
-        f"-basedOnReleaseVersion={release}", "-DLCIncludeEngineContent",
-        f"-map={map_path}", "-utf8output",
-    ], cwd=project_root)
+    run(
+        [
+            str(ue),
+            "BuildCookRun",
+            f"-project={project}",
+            "-noP4",
+            "-platform=Win64",
+            "-clientconfig=Development",
+            "-build",
+            "-cook",
+            "-stage",
+            "-pak",
+            "-compressed",
+            f"-dlcName={plugin_name}",
+            f"-basedOnReleaseVersion={release}",
+            "-DLCIncludeEngineContent",
+            f"-map={map_path}",
+            "-utf8output",
+        ],
+        cwd=project_root,
+    )
 
 
 def find_expected_payload_paths(project: Path, plugin_name: str):
@@ -870,12 +947,25 @@ def find_expected_payload_paths(project: Path, plugin_name: str):
     plugin_root = project_root / "Plugins" / plugin_name
 
     staged_paks = (
-        plugin_root / "Saved" / "StagedBuilds" / "Windows" / project_name
-        / "Plugins" / plugin_name / "Content" / "Paks" / "Windows"
+        plugin_root
+        / "Saved"
+        / "StagedBuilds"
+        / "Windows"
+        / project_name
+        / "Plugins"
+        / plugin_name
+        / "Content"
+        / "Paks"
+        / "Windows"
     )
     cooked_plugin = (
-        plugin_root / "Saved" / "Cooked" / "Windows" / project_name
-        / "Plugins" / plugin_name
+        plugin_root
+        / "Saved"
+        / "Cooked"
+        / "Windows"
+        / project_name
+        / "Plugins"
+        / plugin_name
     )
     prefix = f"{plugin_name}{project_name}-Windows"
 
@@ -901,7 +991,8 @@ def discover_payload_fallback(project: Path, plugin_name: str, payload):
         if payload[key].exists():
             continue
         matches = [
-            p for p in candidates
+            p
+            for p in candidates
             if p.suffix.lower() == suffix and p.stem.lower() == expected_stem
         ]
         if matches:
@@ -910,7 +1001,8 @@ def discover_payload_fallback(project: Path, plugin_name: str, payload):
 
     if not payload["registry"].exists():
         matches = [
-            p for p in candidates
+            p
+            for p in candidates
             if p.name.lower() == "assetregistry.bin"
             and plugin_name.lower() in str(p).lower()
         ]
@@ -953,12 +1045,21 @@ def copy_payload_to_workshop(payload, workshop, preview):
 def run_steamcmd(steamcmd, vdf_path, steam_login):
     if steam_login:
         cmd = [
-            str(steamcmd), "+login", *steam_login.split(),
-            "+workshop_build_item", str(vdf_path), "+quit",
+            str(steamcmd),
+            "+login",
+            *steam_login.split(),
+            "+workshop_build_item",
+            str(vdf_path),
+            "+quit",
         ]
     else:
         cmd = [str(steamcmd), "+workshop_build_item", str(vdf_path), "+quit"]
     run(cmd)
+
+
+# =============================================================================
+# Command-line interface
+# =============================================================================
 
 
 def make_parser():
@@ -997,8 +1098,11 @@ def main_cli(argv=None):
         return
 
     for flag, value in [
-        ("--ue", args.ue), ("--project", args.project), ("--map", args.map_path),
-        ("--plugin", args.plugin), ("--workshop", args.workshop),
+        ("--ue", args.ue),
+        ("--project", args.project),
+        ("--map", args.map_path),
+        ("--plugin", args.plugin),
+        ("--workshop", args.workshop),
         ("--preview", args.preview),
     ]:
         if not value:
@@ -1057,8 +1161,10 @@ def main_cli(argv=None):
     print(f"AssetRegistry:   {payload['registry']}")
 
     try:
-        checker = require_file if args.copy_only else (
-            lambda p, label: require_fresh_file(p, label, build_started_at)
+        checker = (
+            require_file
+            if args.copy_only
+            else (lambda p, label: require_fresh_file(p, label, build_started_at))
         )
         payload["pak"] = checker(payload["pak"], "mod .pak")
         payload["ucas"] = checker(payload["ucas"], "mod .ucas")
@@ -1071,15 +1177,24 @@ def main_cli(argv=None):
     preview_dst, _ = copy_payload_to_workshop(payload, workshop, preview)
     vdf_path = workshop / "my_item.vdf"
     write_vdf(
-        vdf_path, args.appid, args.publishedfileid, workshop, preview_dst,
-        args.title, args.description, args.changenote, args.visibility
+        vdf_path,
+        args.appid,
+        args.publishedfileid,
+        workshop,
+        preview_dst,
+        args.title,
+        args.description,
+        args.changenote,
+        args.visibility,
     )
 
     print("\n=== Workshop Folder Ready ===")
     for file in sorted(workshop.iterdir()):
         if file.is_file():
             modified = datetime.fromtimestamp(file.stat().st_mtime)
-            print(f"{modified:%Y-%m-%d %H:%M:%S}  {file.stat().st_size:>12,}  {file.name}")
+            print(
+                f"{modified:%Y-%m-%d %H:%M:%S}  {file.stat().st_size:>12,}  {file.name}"
+            )
 
     print("\nNext SteamCMD command:")
     print(f'workshop_build_item "{vdf_path}"')
@@ -1094,6 +1209,10 @@ def main_cli(argv=None):
     print("\n=== DONE ===")
 
 
+# =============================================================================
+# Tkinter graphical interface
+# =============================================================================
+
 
 def launch_gui():
     import tkinter as tk
@@ -1101,6 +1220,7 @@ def launch_gui():
 
     try:
         from PIL import Image, ImageTk
+
         pillow_available = True
     except ImportError:
         Image = None
@@ -1140,14 +1260,15 @@ def launch_gui():
         def hide(self, _event=None):
             if self.window:
                 self.window.destroy()
-                self.window = None;
+                self.window = None
+
         window_icon_refs = {
             "photo": None,
         }
 
-
     try:
         import ctypes
+
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
             "Limbs.UniversalMecchaModBuilder.1"
         )
@@ -1178,9 +1299,9 @@ def launch_gui():
         print("Could not set initial window icon:", exc)
 
     branding_refs = {
-    "window_icon": None,
-    "header_logo": None,
-}
+        "window_icon": None,
+        "header_logo": None,
+    }
     root.geometry("1060x760")
     root.minsize(820, 560)
     root.after_idle(apply_window_icon)
@@ -1332,8 +1453,7 @@ def launch_gui():
 
         image = tk.PhotoImage(file=str(path))
         factor = max(
-            1,
-            int(max(image.width() / max_size[0], image.height() / max_size[1]))
+            1, int(max(image.width() / max_size[0], image.height() / max_size[1]))
         )
         if factor > 1:
             image = image.subsample(factor, factor)
@@ -1341,7 +1461,6 @@ def launch_gui():
 
     icon_image_ref = {"image": None}
     header_image_ref = {"image": None}
-
 
     def apply_hardcoded_branding():
         try:
@@ -1351,9 +1470,7 @@ def launch_gui():
                     image.thumbnail((56, 56), Image.Resampling.LANCZOS)
                     header_photo = ImageTk.PhotoImage(image)
                 else:
-                    header_photo = tk.PhotoImage(
-                        file=str(HEADER_LOGO_PATH.resolve())
-                    )
+                    header_photo = tk.PhotoImage(file=str(HEADER_LOGO_PATH.resolve()))
 
                 header_logo.configure(image=header_photo, text="")
                 branding_refs["header_logo"] = header_photo
@@ -1372,7 +1489,9 @@ def launch_gui():
     scroll_host.pack(side="top", fill="both", expand=True)
 
     canvas = tk.Canvas(scroll_host, highlightthickness=0, borderwidth=0)
-    vertical_scroll = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
+    vertical_scroll = ttk.Scrollbar(
+        scroll_host, orient="vertical", command=canvas.yview
+    )
     canvas.configure(yscrollcommand=vertical_scroll.set)
 
     vertical_scroll.pack(side="right", fill="y")
@@ -1461,7 +1580,7 @@ def launch_gui():
     def browse_ue():
         value = filedialog.askopenfilename(
             title="Select UE 5.6 RunUAT.bat",
-            filetypes=[("RunUAT", "RunUAT.bat"), ("Batch", "*.bat"), ("All", "*.*")]
+            filetypes=[("RunUAT", "RunUAT.bat"), ("Batch", "*.bat"), ("All", "*.*")],
         )
         if value:
             fields["ue"].set(value)
@@ -1469,7 +1588,7 @@ def launch_gui():
     def browse_project():
         value = filedialog.askopenfilename(
             title="Select Meccha .uproject",
-            filetypes=[("Unreal project", "*.uproject"), ("All", "*.*")]
+            filetypes=[("Unreal project", "*.uproject"), ("All", "*.*")],
         )
         if value:
             fields["project"].set(value)
@@ -1484,7 +1603,7 @@ def launch_gui():
     def browse_preview():
         value = filedialog.askopenfilename(
             title="Select preview image",
-            filetypes=[("Images", "*.png *.jpg *.jpeg"), ("All", "*.*")]
+            filetypes=[("Images", "*.png *.jpg *.jpeg"), ("All", "*.*")],
         )
         if value:
             fields["preview"].set(value)
@@ -1492,7 +1611,11 @@ def launch_gui():
     def browse_steamcmd():
         value = filedialog.askopenfilename(
             title="Select steamcmd.exe",
-            filetypes=[("SteamCMD", "steamcmd.exe"), ("Executables", "*.exe"), ("All", "*.*")]
+            filetypes=[
+                ("SteamCMD", "steamcmd.exe"),
+                ("Executables", "*.exe"),
+                ("All", "*.*"),
+            ],
         )
         if value:
             fields["steamcmd"].set(value)
@@ -1524,8 +1647,11 @@ def launch_gui():
         label.grid(row=0, column=col * 2, sticky="w", padx=(0 if col == 0 else 12, 5))
         if values:
             widget = ttk.Combobox(
-                compact, textvariable=fields[key], values=values,
-                state="readonly", width=9
+                compact,
+                textvariable=fields[key],
+                values=values,
+                state="readonly",
+                width=9,
             )
         else:
             widget = ttk.Entry(compact, textvariable=fields[key], width=13)
@@ -1598,10 +1724,18 @@ def launch_gui():
 
     options = ttk.LabelFrame(outer, text="Build options", padding=8)
     options.pack(fill="x", pady=(10, 0))
-    ttk.Checkbutton(options, text="Build Full Game", variable=flags["build_full"]).pack(side="left", padx=6)
-    ttk.Checkbutton(options, text="Build My Mod / DLC", variable=flags["build_mod"]).pack(side="left", padx=6)
-    ttk.Checkbutton(options, text="Copy only", variable=flags["copy_only"]).pack(side="left", padx=6)
-    clean = ttk.Checkbutton(options, text="Clean Workshop first", variable=flags["clean_workshop"])
+    ttk.Checkbutton(options, text="Build Full Game", variable=flags["build_full"]).pack(
+        side="left", padx=6
+    )
+    ttk.Checkbutton(
+        options, text="Build My Mod / DLC", variable=flags["build_mod"]
+    ).pack(side="left", padx=6)
+    ttk.Checkbutton(options, text="Copy only", variable=flags["copy_only"]).pack(
+        side="left", padx=6
+    )
+    clean = ttk.Checkbutton(
+        options, text="Clean Workshop first", variable=flags["clean_workshop"]
+    )
     clean.pack(side="left", padx=6)
     ToolTip(clean, hints["clean_workshop"])
     upload_checkbox = ttk.Checkbutton(
@@ -1617,10 +1751,11 @@ def launch_gui():
     profile_bar.pack(fill="x", pady=(8, 0))
 
     profile_var = tk.StringVar()
-    profile_combo = ttk.Combobox(profile_bar, textvariable=profile_var, state="readonly", width=38)
+    profile_combo = ttk.Combobox(
+        profile_bar, textvariable=profile_var, state="readonly", width=38
+    )
     profile_combo.pack(side="left", padx=(0, 8))
 
-    
     ToolTip(profile_combo, hints["profiles"])
 
     status_frame = ttk.Frame(outer)
@@ -1727,11 +1862,7 @@ def launch_gui():
         process = process_holder.get("process")
         started_at = build_state.get("started_at")
 
-        if (
-            process is None
-            or process.poll() is not None
-            or started_at is None
-        ):
+        if process is None or process.poll() is not None or started_at is None:
             return
 
         elapsed_seconds = calculate_duration_seconds(started_at)
@@ -1767,8 +1898,7 @@ def launch_gui():
     ) -> None:
         """Show the final elapsed duration after a build ends."""
         timing_var.set(
-            f"Elapsed: {format_duration(duration_seconds)}    "
-            f"Result: {status}"
+            f"Elapsed: {format_duration(duration_seconds)}    " f"Result: {status}"
         )
 
     def create_build_snapshot() -> dict:
@@ -1792,10 +1922,7 @@ def launch_gui():
             "description": fields["description"].get(),
             "changenote": fields["changenote"].get(),
             "steamcmd": fields["steamcmd"].get().strip(),
-            "flags": {
-                key: bool(variable.get())
-                for key, variable in flags.items()
-            },
+            "flags": {key: bool(variable.get()) for key, variable in flags.items()},
         }
 
     def begin_build_record(cmd: list[str]) -> Path:
@@ -1816,13 +1943,15 @@ def launch_gui():
         log_filename = f"{build_id}_{safe_plugin_name}.log"
         log_path = BUILD_LOGS_DIR / log_filename
 
-        build_state.update({
-            "id": build_id,
-            "log_path": log_path,
-            "started_at": started_at,
-            "cancel_requested": False,
-            "record_active": True,
-        })
+        build_state.update(
+            {
+                "id": build_id,
+                "log_path": log_path,
+                "started_at": started_at,
+                "cancel_requested": False,
+                "record_active": True,
+            }
+        )
 
         safe_command = redact_command_for_log(cmd)
         safe_command_text = subprocess.list2cmdline(safe_command)
@@ -1830,11 +1959,13 @@ def launch_gui():
         configuration = create_build_snapshot()
         estimate = get_build_time_estimate(configuration)
 
-        build_state.update({
-            "estimated_seconds": estimate.get("estimated_seconds"),
-            "estimate_sample_count": estimate.get("sample_count", 0),
-            "mode": estimate.get("mode"),
-        })
+        build_state.update(
+            {
+                "estimated_seconds": estimate.get("estimated_seconds"),
+                "estimate_sample_count": estimate.get("sample_count", 0),
+                "mode": estimate.get("mode"),
+            }
+        )
 
         record = {
             "id": build_id,
@@ -1896,9 +2027,7 @@ def launch_gui():
             return
 
         finished_at = datetime.now().astimezone()
-        duration_seconds = calculate_duration_seconds(
-            build_state.get("started_at")
-        )
+        duration_seconds = calculate_duration_seconds(build_state.get("started_at"))
 
         completion_text = (
             "\n"
@@ -1932,16 +2061,18 @@ def launch_gui():
 
     def reset_active_build_state() -> None:
         """Clear transient build state after completion."""
-        build_state.update({
-            "id": None,
-            "log_path": None,
-            "started_at": None,
-            "cancel_requested": False,
-            "record_active": False,
-            "estimated_seconds": None,
-            "estimate_sample_count": 0,
-            "mode": None,
-        })
+        build_state.update(
+            {
+                "id": None,
+                "log_path": None,
+                "started_at": None,
+                "cancel_requested": False,
+                "record_active": False,
+                "estimated_seconds": None,
+                "estimate_sample_count": 0,
+                "mode": None,
+            }
+        )
 
     def refresh_plugins():
         plugins = []
@@ -1950,8 +2081,7 @@ def launch_gui():
             plugin_dir = Path(project_text).parent / "Plugins"
             if plugin_dir.exists():
                 plugins = sorted(
-                    {p.stem for p in plugin_dir.glob("*/*.uplugin")},
-                    key=str.lower
+                    {p.stem for p in plugin_dir.glob("*/*.uplugin")}, key=str.lower
                 )
         plugin_combo["values"] = plugins
         # Do not silently choose a plugin. Wrong plugin = wrong DLC output.
@@ -2021,9 +2151,13 @@ def launch_gui():
             (PROFILES_DIR / f"{name}.json").unlink(missing_ok=True)
             refresh_profiles()
 
-    ttk.Button(profile_bar, text="Save Current", command=save_profile).pack(side="left", padx=4)
+    ttk.Button(profile_bar, text="Save Current", command=save_profile).pack(
+        side="left", padx=4
+    )
     ttk.Button(profile_bar, text="Load", command=load_profile).pack(side="left", padx=4)
-    ttk.Button(profile_bar, text="Delete", command=delete_profile).pack(side="left", padx=4)
+    ttk.Button(profile_bar, text="Delete", command=delete_profile).pack(
+        side="left", padx=4
+    )
     open_profiles_button = ttk.Button(
         profile_bar,
         text="Open Local Profiles Folder",
@@ -2057,56 +2191,70 @@ def launch_gui():
         # Unreal Engine / RunUAT
         # ---------------------------------------------------------
         if not ue_text:
-            results.append(validation_result(
-                "error",
-                "Unreal Automation Tool path is missing",
-                "Select UE 5.6 RunUAT.bat.",
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Unreal Automation Tool path is missing",
+                    "Select UE 5.6 RunUAT.bat.",
+                )
+            )
         else:
             ue_path = Path(ue_text).expanduser()
 
             if not ue_path.is_file():
-                results.append(validation_result(
-                    "error",
-                    "Unreal Automation Tool was not found",
-                    str(ue_path),
-                ))
+                results.append(
+                    validation_result(
+                        "error",
+                        "Unreal Automation Tool was not found",
+                        str(ue_path),
+                    )
+                )
             elif ue_path.name.lower() != "runuat.bat":
-                results.append(validation_result(
-                    "warning",
-                    "Selected Unreal tool is not named RunUAT.bat",
-                    str(ue_path),
-                ))
+                results.append(
+                    validation_result(
+                        "warning",
+                        "Selected Unreal tool is not named RunUAT.bat",
+                        str(ue_path),
+                    )
+                )
             else:
                 unreal_version = detect_unreal_version(ue_path)
 
                 if unreal_version:
                     level = "pass" if unreal_version.startswith("5.6") else "warning"
 
-                    results.append(validation_result(
-                        level,
-                        f"Unreal Engine {unreal_version} found",
-                        str(ue_path),
-                    ))
+                    results.append(
+                        validation_result(
+                            level,
+                            f"Unreal Engine {unreal_version} found",
+                            str(ue_path),
+                        )
+                    )
 
                     if not unreal_version.startswith("5.6"):
-                        results.append(validation_result(
-                            "warning",
-                            "The Meccha Mod Kit expects Unreal Engine 5.6",
-                            f"Selected installation appears to be Unreal Engine {unreal_version}.",
-                        ))
+                        results.append(
+                            validation_result(
+                                "warning",
+                                "The Meccha Mod Kit expects Unreal Engine 5.6",
+                                f"Selected installation appears to be Unreal Engine {unreal_version}.",
+                            )
+                        )
                 else:
-                    results.append(validation_result(
-                        "pass",
-                        "Unreal Automation Tool found",
-                        str(ue_path),
-                    ))
+                    results.append(
+                        validation_result(
+                            "pass",
+                            "Unreal Automation Tool found",
+                            str(ue_path),
+                        )
+                    )
 
-                    results.append(validation_result(
-                        "warning",
-                        "Unreal version could not be identified from the path",
-                        "Confirm that this RunUAT.bat belongs to Unreal Engine 5.6.",
-                    ))
+                    results.append(
+                        validation_result(
+                            "warning",
+                            "Unreal version could not be identified from the path",
+                            "Confirm that this RunUAT.bat belongs to Unreal Engine 5.6.",
+                        )
+                    )
 
         # ---------------------------------------------------------
         # Unreal project
@@ -2114,61 +2262,75 @@ def launch_gui():
         project = None
 
         if not project_text:
-            results.append(validation_result(
-                "error",
-                "Meccha project path is missing",
-                "Select the Meccha .uproject file.",
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Meccha project path is missing",
+                    "Select the Meccha .uproject file.",
+                )
+            )
         else:
             project = Path(project_text).expanduser()
 
             if not project.is_file():
-                results.append(validation_result(
-                    "error",
-                    "Meccha project was not found",
-                    str(project),
-                ))
+                results.append(
+                    validation_result(
+                        "error",
+                        "Meccha project was not found",
+                        str(project),
+                    )
+                )
                 project = None
 
             elif project.suffix.lower() != ".uproject":
-                results.append(validation_result(
-                    "error",
-                    "Selected project is not a .uproject file",
-                    str(project),
-                ))
+                results.append(
+                    validation_result(
+                        "error",
+                        "Selected project is not a .uproject file",
+                        str(project),
+                    )
+                )
                 project = None
 
             else:
                 project_data, project_error = inspect_json_descriptor(project)
 
                 if project_error:
-                    results.append(validation_result(
-                        "error",
-                        "The .uproject descriptor is invalid",
-                        project_error,
-                    ))
+                    results.append(
+                        validation_result(
+                            "error",
+                            "The .uproject descriptor is invalid",
+                            project_error,
+                        )
+                    )
                 else:
-                    results.append(validation_result(
-                        "pass",
-                        "Meccha project found",
-                        str(project),
-                    ))
+                    results.append(
+                        validation_result(
+                            "pass",
+                            "Meccha project found",
+                            str(project),
+                        )
+                    )
 
                     engine_association = str(
                         project_data.get("EngineAssociation", "")
                     ).strip()
 
                     if engine_association:
-                        results.append(validation_result(
-                            "pass",
-                            f"Project EngineAssociation: {engine_association}",
-                        ))
+                        results.append(
+                            validation_result(
+                                "pass",
+                                f"Project EngineAssociation: {engine_association}",
+                            )
+                        )
                     else:
-                        results.append(validation_result(
-                            "warning",
-                            "The project has no EngineAssociation value",
-                            "This may be intentional for a source-built Unreal project.",
-                        ))
+                        results.append(
+                            validation_result(
+                                "warning",
+                                "The project has no EngineAssociation value",
+                                "This may be intentional for a source-built Unreal project.",
+                            )
+                        )
 
         # ---------------------------------------------------------
         # Plugin
@@ -2177,37 +2339,45 @@ def launch_gui():
         plugin_descriptor = None
 
         if not plugin_name:
-            results.append(validation_result(
-                "error",
-                "Asset plugin is not selected",
-                "Select the plugin containing the map assets.",
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Asset plugin is not selected",
+                    "Select the plugin containing the map assets.",
+                )
+            )
 
         elif project is not None:
             plugin_root = project.parent / "Plugins" / plugin_name
 
             if not plugin_root.is_dir():
-                results.append(validation_result(
-                    "error",
-                    "Plugin folder was not found",
-                    str(plugin_root),
-                ))
+                results.append(
+                    validation_result(
+                        "error",
+                        "Plugin folder was not found",
+                        str(plugin_root),
+                    )
+                )
             else:
                 descriptors = sorted(plugin_root.glob("*.uplugin"))
 
                 if not descriptors:
-                    results.append(validation_result(
-                        "error",
-                        "Plugin descriptor was not found",
-                        f"No .uplugin file exists in:\n{plugin_root}",
-                    ))
+                    results.append(
+                        validation_result(
+                            "error",
+                            "Plugin descriptor was not found",
+                            f"No .uplugin file exists in:\n{plugin_root}",
+                        )
+                    )
 
                 elif len(descriptors) > 1:
-                    results.append(validation_result(
-                        "warning",
-                        "Multiple .uplugin descriptors were found",
-                        "\n".join(str(path) for path in descriptors),
-                    ))
+                    results.append(
+                        validation_result(
+                            "warning",
+                            "Multiple .uplugin descriptors were found",
+                            "\n".join(str(path) for path in descriptors),
+                        )
+                    )
                     plugin_descriptor = descriptors[0]
 
                 else:
@@ -2219,33 +2389,41 @@ def launch_gui():
                     )
 
                     if plugin_error:
-                        results.append(validation_result(
-                            "error",
-                            "Plugin descriptor contains invalid JSON",
-                            plugin_error,
-                        ))
+                        results.append(
+                            validation_result(
+                                "error",
+                                "Plugin descriptor contains invalid JSON",
+                                plugin_error,
+                            )
+                        )
                     else:
-                        results.append(validation_result(
-                            "pass",
-                            f"Plugin found: {plugin_name}",
-                            str(plugin_root),
-                        ))
+                        results.append(
+                            validation_result(
+                                "pass",
+                                f"Plugin found: {plugin_name}",
+                                str(plugin_root),
+                            )
+                        )
 
                         if plugin_descriptor.stem != plugin_name:
-                            results.append(validation_result(
-                                "warning",
-                                "Plugin folder and descriptor names differ",
-                                (
-                                    f"Folder: {plugin_name}\n"
-                                    f"Descriptor: {plugin_descriptor.name}"
-                                ),
-                            ))
+                            results.append(
+                                validation_result(
+                                    "warning",
+                                    "Plugin folder and descriptor names differ",
+                                    (
+                                        f"Folder: {plugin_name}\n"
+                                        f"Descriptor: {plugin_descriptor.name}"
+                                    ),
+                                )
+                            )
                         else:
-                            results.append(validation_result(
-                                "pass",
-                                "Plugin folder and descriptor names match",
-                                plugin_descriptor.name,
-                            ))
+                            results.append(
+                                validation_result(
+                                    "pass",
+                                    "Plugin folder and descriptor names match",
+                                    plugin_descriptor.name,
+                                )
+                            )
 
                         can_contain_content = plugin_data.get(
                             "CanContainContent",
@@ -2253,20 +2431,24 @@ def launch_gui():
                         )
 
                         if can_contain_content is True:
-                            results.append(validation_result(
-                                "pass",
-                                "Plugin allows content",
-                                "CanContainContent is enabled.",
-                            ))
+                            results.append(
+                                validation_result(
+                                    "pass",
+                                    "Plugin allows content",
+                                    "CanContainContent is enabled.",
+                                )
+                            )
                         else:
-                            results.append(validation_result(
-                                "error",
-                                "Plugin does not allow content",
-                                (
-                                    "CanContainContent is false or missing in the "
-                                    ".uplugin descriptor."
-                                ),
-                            ))
+                            results.append(
+                                validation_result(
+                                    "error",
+                                    "Plugin does not allow content",
+                                    (
+                                        "CanContainContent is false or missing in the "
+                                        ".uplugin descriptor."
+                                    ),
+                                )
+                            )
 
         # ---------------------------------------------------------
         # Runtime map
@@ -2274,57 +2456,69 @@ def launch_gui():
         map_format_valid = True
 
         if not map_path:
-            results.append(validation_result(
-                "error",
-                "Runtime map path is missing",
-                "Example: /Game/Mods/UserMap01/MyMap",
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Runtime map path is missing",
+                    "Example: /Game/Mods/UserMap01/MyMap",
+                )
+            )
             map_format_valid = False
 
         else:
             if not map_path.startswith("/"):
-                results.append(validation_result(
-                    "error",
-                    "Runtime map path must begin with '/'",
-                    map_path,
-                ))
+                results.append(
+                    validation_result(
+                        "error",
+                        "Runtime map path must begin with '/'",
+                        map_path,
+                    )
+                )
                 map_format_valid = False
 
             if map_path.lower().endswith(".umap"):
-                results.append(validation_result(
-                    "error",
-                    "Remove the .umap extension from the runtime map path",
-                    map_path,
-                ))
+                results.append(
+                    validation_result(
+                        "error",
+                        "Remove the .umap extension from the runtime map path",
+                        map_path,
+                    )
+                )
                 map_format_valid = False
 
             map_leaf = map_path.rstrip("/").rsplit("/", 1)[-1]
 
             if "." in map_leaf:
-                results.append(validation_result(
-                    "error",
-                    "Use a package path rather than Object.Object syntax",
-                    map_path,
-                ))
+                results.append(
+                    validation_result(
+                        "error",
+                        "Use a package path rather than Object.Object syntax",
+                        map_path,
+                    )
+                )
                 map_format_valid = False
 
             if map_format_valid:
                 if map_path.startswith("/Game/Mods/UserMap01/"):
-                    results.append(validation_result(
-                        "pass",
-                        "Runtime map path uses Meccha's expected folder",
-                        map_path,
-                    ))
+                    results.append(
+                        validation_result(
+                            "pass",
+                            "Runtime map path uses Meccha's expected folder",
+                            map_path,
+                        )
+                    )
                 else:
-                    results.append(validation_result(
-                        "warning",
-                        "Runtime map path uses an unusual folder",
-                        (
-                            f"{map_path}\n\n"
-                            "Known working Meccha location:\n"
-                            "/Game/Mods/UserMap01/MapName"
-                        ),
-                    ))
+                    results.append(
+                        validation_result(
+                            "warning",
+                            "Runtime map path uses an unusual folder",
+                            (
+                                f"{map_path}\n\n"
+                                "Known working Meccha location:\n"
+                                "/Game/Mods/UserMap01/MapName"
+                            ),
+                        )
+                    )
 
                 if project is not None and plugin_name:
                     map_candidates = find_map_candidates(
@@ -2343,73 +2537,91 @@ def launch_gui():
                                 f"{len(map_candidates) - len(shown_candidates)} more"
                             )
 
-                        results.append(validation_result(
-                            "pass",
-                            "Matching .umap file found",
-                            details,
-                        ))
+                        results.append(
+                            validation_result(
+                                "pass",
+                                "Matching .umap file found",
+                                details,
+                            )
+                        )
                     else:
-                        results.append(validation_result(
-                            "warning",
-                            "No matching .umap filename was found",
-                            (
-                                "The build may still work if Meccha remaps or copies "
-                                "the map to its runtime path.\n\n"
-                                f"Searched for: {map_leaf}.umap"
-                            ),
-                        ))
+                        results.append(
+                            validation_result(
+                                "warning",
+                                "No matching .umap filename was found",
+                                (
+                                    "The build may still work if Meccha remaps or copies "
+                                    "the map to its runtime path.\n\n"
+                                    f"Searched for: {map_leaf}.umap"
+                                ),
+                            )
+                        )
 
         # ---------------------------------------------------------
         # Release
         # ---------------------------------------------------------
         if not release:
-            results.append(validation_result(
-                "error",
-                "Release version is missing",
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Release version is missing",
+                )
+            )
         elif not re.fullmatch(r"\d+(?:\.\d+)*", release):
-            results.append(validation_result(
-                "warning",
-                "Release version uses an unusual format",
-                release,
-            ))
+            results.append(
+                validation_result(
+                    "warning",
+                    "Release version uses an unusual format",
+                    release,
+                )
+            )
         else:
-            results.append(validation_result(
-                "pass",
-                f"Release version is valid: {release}",
-            ))
+            results.append(
+                validation_result(
+                    "pass",
+                    f"Release version is valid: {release}",
+                )
+            )
 
         # ---------------------------------------------------------
         # Workshop directory
         # ---------------------------------------------------------
         if not workshop_text:
-            results.append(validation_result(
-                "error",
-                "Workshop folder is missing",
-                "Select the staging folder for the Workshop payload.",
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Workshop folder is missing",
+                    "Select the staging folder for the Workshop payload.",
+                )
+            )
         else:
             workshop = Path(workshop_text).expanduser()
 
             if workshop.exists():
                 if not workshop.is_dir():
-                    results.append(validation_result(
-                        "error",
-                        "Workshop path is not a directory",
-                        str(workshop),
-                    ))
+                    results.append(
+                        validation_result(
+                            "error",
+                            "Workshop path is not a directory",
+                            str(workshop),
+                        )
+                    )
                 elif not os.access(workshop, os.W_OK):
-                    results.append(validation_result(
-                        "error",
-                        "Workshop folder is not writable",
-                        str(workshop),
-                    ))
+                    results.append(
+                        validation_result(
+                            "error",
+                            "Workshop folder is not writable",
+                            str(workshop),
+                        )
+                    )
                 else:
-                    results.append(validation_result(
-                        "pass",
-                        "Workshop folder is writable",
-                        str(workshop),
-                    ))
+                    results.append(
+                        validation_result(
+                            "pass",
+                            "Workshop folder is writable",
+                            str(workshop),
+                        )
+                    )
             else:
                 existing_parent = workshop.parent
 
@@ -2419,137 +2631,160 @@ def launch_gui():
                 ):
                     existing_parent = existing_parent.parent
 
-                if (
-                    existing_parent.is_dir()
-                    and os.access(existing_parent, os.W_OK)
-                ):
-                    results.append(validation_result(
-                        "warning",
-                        "Workshop folder does not exist yet",
-                        (
-                            f"{workshop}\n\n"
-                            "The folder will be created when the build starts."
-                        ),
-                    ))
+                if existing_parent.is_dir() and os.access(existing_parent, os.W_OK):
+                    results.append(
+                        validation_result(
+                            "warning",
+                            "Workshop folder does not exist yet",
+                            (
+                                f"{workshop}\n\n"
+                                "The folder will be created when the build starts."
+                            ),
+                        )
+                    )
                 else:
-                    results.append(validation_result(
-                        "error",
-                        "Workshop folder cannot be created",
-                        (
-                            f"Target: {workshop}\n"
-                            f"Nearest existing parent: {existing_parent}"
-                        ),
-                    ))
+                    results.append(
+                        validation_result(
+                            "error",
+                            "Workshop folder cannot be created",
+                            (
+                                f"Target: {workshop}\n"
+                                f"Nearest existing parent: {existing_parent}"
+                            ),
+                        )
+                    )
 
         # ---------------------------------------------------------
         # Preview image
         # ---------------------------------------------------------
         if not preview_text:
-            results.append(validation_result(
-                "error",
-                "Workshop preview image is missing",
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Workshop preview image is missing",
+                )
+            )
         else:
             preview = Path(preview_text).expanduser()
 
             if not preview.is_file():
-                results.append(validation_result(
-                    "error",
-                    "Workshop preview image was not found",
-                    str(preview),
-                ))
+                results.append(
+                    validation_result(
+                        "error",
+                        "Workshop preview image was not found",
+                        str(preview),
+                    )
+                )
             elif preview.suffix.lower() not in {
                 ".png",
                 ".jpg",
                 ".jpeg",
                 ".webp",
             }:
-                results.append(validation_result(
-                    "warning",
-                    "Preview image uses an unusual format",
-                    (
-                        f"{preview.suffix or 'No extension'}\n"
-                        "PNG, JPG, JPEG, or WEBP is recommended."
-                    ),
-                ))
+                results.append(
+                    validation_result(
+                        "warning",
+                        "Preview image uses an unusual format",
+                        (
+                            f"{preview.suffix or 'No extension'}\n"
+                            "PNG, JPG, JPEG, or WEBP is recommended."
+                        ),
+                    )
+                )
             else:
                 try:
                     size_bytes = preview.stat().st_size
 
                     if size_bytes <= 0:
-                        results.append(validation_result(
-                            "error",
-                            "Preview image is empty",
-                            str(preview),
-                        ))
+                        results.append(
+                            validation_result(
+                                "error",
+                                "Preview image is empty",
+                                str(preview),
+                            )
+                        )
                     else:
-                        results.append(validation_result(
-                            "pass",
-                            "Workshop preview image found",
-                            (
-                                f"{preview}\n"
-                                f"Size: {size_bytes:,} bytes"
-                            ),
-                        ))
+                        results.append(
+                            validation_result(
+                                "pass",
+                                "Workshop preview image found",
+                                (f"{preview}\n" f"Size: {size_bytes:,} bytes"),
+                            )
+                        )
                 except OSError as exc:
-                    results.append(validation_result(
-                        "error",
-                        "Preview image could not be inspected",
-                        str(exc),
-                    ))
+                    results.append(
+                        validation_result(
+                            "error",
+                            "Preview image could not be inspected",
+                            str(exc),
+                        )
+                    )
 
         # ---------------------------------------------------------
         # Steam Workshop identifiers
         # ---------------------------------------------------------
         if not appid:
-            results.append(validation_result(
-                "error",
-                "Steam App ID is missing",
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Steam App ID is missing",
+                )
+            )
         elif not appid.isdigit():
-            results.append(validation_result(
-                "error",
-                "Steam App ID must be numeric",
-                appid,
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Steam App ID must be numeric",
+                    appid,
+                )
+            )
         elif appid != MECCHA_APP_ID:
-            results.append(validation_result(
-                "warning",
-                "Steam App ID differs from Meccha Chameleon",
-                (
-                    f"Selected: {appid}\n"
-                    f"Expected: {MECCHA_APP_ID}"
-                ),
-            ))
+            results.append(
+                validation_result(
+                    "warning",
+                    "Steam App ID differs from Meccha Chameleon",
+                    (f"Selected: {appid}\n" f"Expected: {MECCHA_APP_ID}"),
+                )
+            )
         else:
-            results.append(validation_result(
-                "pass",
-                f"Meccha Steam App ID confirmed: {appid}",
-            ))
+            results.append(
+                validation_result(
+                    "pass",
+                    f"Meccha Steam App ID confirmed: {appid}",
+                )
+            )
 
         if not publishedfileid:
-            results.append(validation_result(
-                "error",
-                "Published File ID is missing",
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Published File ID is missing",
+                )
+            )
         elif not publishedfileid.isdigit():
-            results.append(validation_result(
-                "error",
-                "Published File ID must be numeric",
-                publishedfileid,
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "Published File ID must be numeric",
+                    publishedfileid,
+                )
+            )
         elif publishedfileid == "0":
-            results.append(validation_result(
-                "warning",
-                "Published File ID is 0",
-                "SteamCMD will create a new Workshop item.",
-            ))
+            results.append(
+                validation_result(
+                    "warning",
+                    "Published File ID is 0",
+                    "SteamCMD will create a new Workshop item.",
+                )
+            )
         else:
-            results.append(validation_result(
-                "pass",
-                "Existing Workshop item will be updated",
-                f"Published File ID: {publishedfileid}",
-            ))
+            results.append(
+                validation_result(
+                    "pass",
+                    "Existing Workshop item will be updated",
+                    f"Published File ID: {publishedfileid}",
+                )
+            )
 
         # ---------------------------------------------------------
         # Build options
@@ -2559,42 +2794,54 @@ def launch_gui():
             and not flags["build_full"].get()
             and not flags["build_mod"].get()
         ):
-            results.append(validation_result(
-                "error",
-                "No build operation is selected",
-                (
-                    "Enable Build Full Game, Build My Mod / DLC, "
-                    "or choose Copy only."
-                ),
-            ))
+            results.append(
+                validation_result(
+                    "error",
+                    "No build operation is selected",
+                    (
+                        "Enable Build Full Game, Build My Mod / DLC, "
+                        "or choose Copy only."
+                    ),
+                )
+            )
         elif flags["copy_only"].get():
-            results.append(validation_result(
-                "warning",
-                "Copy-only mode is enabled",
-                "No Unreal build commands will run.",
-            ))
+            results.append(
+                validation_result(
+                    "warning",
+                    "Copy-only mode is enabled",
+                    "No Unreal build commands will run.",
+                )
+            )
         else:
             if flags["build_full"].get():
-                results.append(validation_result(
-                    "pass",
-                    "Full-game build is enabled",
-                ))
+                results.append(
+                    validation_result(
+                        "pass",
+                        "Full-game build is enabled",
+                    )
+                )
             else:
-                results.append(validation_result(
-                    "warning",
-                    "Full-game build will be skipped",
-                ))
+                results.append(
+                    validation_result(
+                        "warning",
+                        "Full-game build will be skipped",
+                    )
+                )
 
             if flags["build_mod"].get():
-                results.append(validation_result(
-                    "pass",
-                    "My Mod / DLC build is enabled",
-                ))
+                results.append(
+                    validation_result(
+                        "pass",
+                        "My Mod / DLC build is enabled",
+                    )
+                )
             else:
-                results.append(validation_result(
-                    "warning",
-                    "My Mod / DLC build will be skipped",
-                ))
+                results.append(
+                    validation_result(
+                        "warning",
+                        "My Mod / DLC build will be skipped",
+                    )
+                )
 
         # ---------------------------------------------------------
         # SteamCMD upload
@@ -2603,76 +2850,94 @@ def launch_gui():
             steamcmd_text = fields["steamcmd"].get().strip()
 
             if not steamcmd_text:
-                results.append(validation_result(
-                    "error",
-                    "SteamCMD is required because upload is enabled",
-                ))
+                results.append(
+                    validation_result(
+                        "error",
+                        "SteamCMD is required because upload is enabled",
+                    )
+                )
             else:
                 steamcmd = Path(steamcmd_text).expanduser()
 
                 if not steamcmd.is_file():
-                    results.append(validation_result(
-                        "error",
-                        "SteamCMD was not found",
-                        str(steamcmd),
-                    ))
+                    results.append(
+                        validation_result(
+                            "error",
+                            "SteamCMD was not found",
+                            str(steamcmd),
+                        )
+                    )
                 elif steamcmd.name.lower() != "steamcmd.exe":
-                    results.append(validation_result(
-                        "warning",
-                        "Selected upload executable is not named steamcmd.exe",
-                        str(steamcmd),
-                    ))
+                    results.append(
+                        validation_result(
+                            "warning",
+                            "Selected upload executable is not named steamcmd.exe",
+                            str(steamcmd),
+                        )
+                    )
                 else:
-                    results.append(validation_result(
-                        "pass",
-                        "SteamCMD found",
-                        str(steamcmd),
-                    ))
+                    results.append(
+                        validation_result(
+                            "pass",
+                            "SteamCMD found",
+                            str(steamcmd),
+                        )
+                    )
 
             if fields["steam_login"].get().strip():
-                results.append(validation_result(
-                    "warning",
-                    "Steam login arguments are populated",
-                    (
-                        "Credentials may be visible in process arguments and logs.\n"
-                        "Using an existing SteamCMD login is recommended."
-                    ),
-                ))
+                results.append(
+                    validation_result(
+                        "warning",
+                        "Steam login arguments are populated",
+                        (
+                            "Credentials may be visible in process arguments and logs.\n"
+                            "Using an existing SteamCMD login is recommended."
+                        ),
+                    )
+                )
             else:
-                results.append(validation_result(
-                    "pass",
-                    "No Steam credentials are stored in the build command",
-                ))
+                results.append(
+                    validation_result(
+                        "pass",
+                        "No Steam credentials are stored in the build command",
+                    )
+                )
         else:
-            results.append(validation_result(
-                "pass",
-                "Automatic SteamCMD upload is disabled",
-                "The Workshop payload will be prepared locally.",
-            ))
+            results.append(
+                validation_result(
+                    "pass",
+                    "Automatic SteamCMD upload is disabled",
+                    "The Workshop payload will be prepared locally.",
+                )
+            )
         # ---------------------------------------------------------
         # Running Unreal Editor
         # ---------------------------------------------------------
         running_unreal_processes = find_running_unreal_processes()
 
         if running_unreal_processes:
-            results.append(validation_result(
-                "warning",
-                "Unreal Editor is currently running",
-                (
-                    "Detected process(es):\n"
-                    + "\n".join(
-                        f"• {process_name}"
-                        for process_name in running_unreal_processes
-                    )
-                    + "\n\nSave all assets before building. Closing Unreal "
-                    "Editor is recommended before cooking or packaging."
-                ),
-            ))
+            results.append(
+                validation_result(
+                    "warning",
+                    "Unreal Editor is currently running",
+                    (
+                        "Detected process(es):\n"
+                        + "\n".join(
+                            f"• {process_name}"
+                            for process_name in running_unreal_processes
+                        )
+                        + "\n\nSave all assets before building. Closing Unreal "
+                        "Editor is recommended before cooking or packaging."
+                    ),
+                )
+            )
         else:
-            results.append(validation_result(
-                "pass",
-                "Unreal Editor is not running",
-            ))
+            results.append(
+                validation_result(
+                    "pass",
+                    "Unreal Editor is not running",
+                )
+            )
 
         # ---------------------------------------------------------
         # Possible Unreal autosave or recovery files
@@ -2687,10 +2952,7 @@ def launch_gui():
                 shown_files = recovery_files[:8]
 
                 recovery_details = [
-                    (
-                        f"• {path.name} — {describe_file_age(path)}\n"
-                        f"  {path}"
-                    )
+                    (f"• {path.name} — {describe_file_age(path)}\n" f"  {path}")
                     for path in shown_files
                 ]
 
@@ -2699,63 +2961,66 @@ def launch_gui():
                         f"...and {len(recovery_files) - len(shown_files)} more"
                     )
 
-                results.append(validation_result(
-                    "warning",
-                    "Potential Unreal recovery or autosave files were found",
-                    (
-                        "This does not necessarily mean assets are currently "
-                        "unsaved. Save all work in Unreal before building.\n\n"
-                        + "\n".join(recovery_details)
-                    ),
-                ))
+                results.append(
+                    validation_result(
+                        "warning",
+                        "Potential Unreal recovery or autosave files were found",
+                        (
+                            "This does not necessarily mean assets are currently "
+                            "unsaved. Save all work in Unreal before building.\n\n"
+                            + "\n".join(recovery_details)
+                        ),
+                    )
+                )
             else:
-                results.append(validation_result(
-                    "pass",
-                    "No Unreal autosave or recovery files were found",
-                    (
-                        "No recovery files were found in the project's standard "
-                        "Saved\\Autosaves or Saved\\Backup folders."
-                    ),
-                ))
+                results.append(
+                    validation_result(
+                        "pass",
+                        "No Unreal autosave or recovery files were found",
+                        (
+                            "No recovery files were found in the project's standard "
+                            "Saved\\Autosaves or Saved\\Backup folders."
+                        ),
+                    )
+                )
 
         # ---------------------------------------------------------
         # Historical build-time estimate
         # ---------------------------------------------------------
         estimate_configuration = {
-            "flags": {
-                key: bool(variable.get())
-                for key, variable in flags.items()
-            },
+            "flags": {key: bool(variable.get()) for key, variable in flags.items()},
         }
 
-        estimate = get_build_time_estimate(
-            estimate_configuration
-        )
+        estimate = get_build_time_estimate(estimate_configuration)
 
         if estimate["available"]:
-            results.append(validation_result(
-                "pass",
-                "Historical build-time estimate is available",
-                (
-                    f"Mode: {estimate['mode_label']}\n"
-                    f"Estimated total: "
-                    f"{format_duration(estimate['estimated_seconds'])}\n"
-                    f"Based on {estimate['sample_count']} successful "
-                    "comparable build(s)."
-                ),
-            ))
+            results.append(
+                validation_result(
+                    "pass",
+                    "Historical build-time estimate is available",
+                    (
+                        f"Mode: {estimate['mode_label']}\n"
+                        f"Estimated total: "
+                        f"{format_duration(estimate['estimated_seconds'])}\n"
+                        f"Based on {estimate['sample_count']} successful "
+                        "comparable build(s)."
+                    ),
+                )
+            )
         else:
-            results.append(validation_result(
-                "warning",
-                "Build-time estimate is still learning",
-                (
-                    f"Mode: {estimate['mode_label']}\n"
-                    f"Successful comparable builds: "
-                    f"{estimate['sample_count']}\n\n"
-                    "At least two successful builds in this mode are needed "
-                    "before an estimate is shown."
-                ),
-            ))
+            results.append(
+                validation_result(
+                    "warning",
+                    "Build-time estimate is still learning",
+                    (
+                        f"Mode: {estimate['mode_label']}\n"
+                        f"Successful comparable builds: "
+                        f"{estimate['sample_count']}\n\n"
+                        "At least two successful builds in this mode are needed "
+                        "before an estimate is shown."
+                    ),
+                )
+            )
 
         return results
 
@@ -2775,9 +3040,7 @@ def launch_gui():
 
         try:
             if WINDOW_ICON_PATH.is_file():
-                report_window.iconbitmap(
-                    default=str(WINDOW_ICON_PATH.resolve())
-                )
+                report_window.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
         except Exception:
             pass
 
@@ -2802,13 +3065,9 @@ def launch_gui():
         ).pack(anchor="w", pady=(4, 0))
 
         if counts["error"]:
-            readiness_text = (
-                "Build blocked — resolve all errors before continuing."
-            )
+            readiness_text = "Build blocked — resolve all errors before continuing."
         elif counts["warning"]:
-            readiness_text = (
-                "Ready with warnings — review them before continuing."
-            )
+            readiness_text = "Ready with warnings — review them before continuing."
         else:
             readiness_text = "Ready to build."
 
@@ -2962,21 +3221,36 @@ def launch_gui():
                 str(Path(__file__).resolve()),
             ]
 
-        cmd.extend([
-            "--ue", fields["ue"].get().strip(),
-            "--project", fields["project"].get().strip(),
-            "--plugin", fields["plugin"].get().strip(),
-            "--map", fields["map"].get().strip(),
-            "--release", fields["release"].get().strip(),
-            "--workshop", fields["workshop"].get().strip(),
-            "--preview", fields["preview"].get().strip(),
-            "--appid", fields["appid"].get().strip(),
-            "--publishedfileid", fields["publishedfileid"].get().strip(),
-            "--visibility", fields["visibility"].get().strip(),
-            "--title", fields["title"].get(),
-            "--description", fields["description"].get(),
-            "--changenote", fields["changenote"].get(),
-        ])
+        cmd.extend(
+            [
+                "--ue",
+                fields["ue"].get().strip(),
+                "--project",
+                fields["project"].get().strip(),
+                "--plugin",
+                fields["plugin"].get().strip(),
+                "--map",
+                fields["map"].get().strip(),
+                "--release",
+                fields["release"].get().strip(),
+                "--workshop",
+                fields["workshop"].get().strip(),
+                "--preview",
+                fields["preview"].get().strip(),
+                "--appid",
+                fields["appid"].get().strip(),
+                "--publishedfileid",
+                fields["publishedfileid"].get().strip(),
+                "--visibility",
+                fields["visibility"].get().strip(),
+                "--title",
+                fields["title"].get(),
+                "--description",
+                fields["description"].get(),
+                "--changenote",
+                fields["changenote"].get(),
+            ]
+        )
 
         if not flags["build_full"].get():
             cmd.append("--skip-full-game")
@@ -2991,17 +3265,21 @@ def launch_gui():
             cmd.append("--clean-workshop")
 
         if flags["upload"].get():
-            cmd.extend([
-                "--upload",
-                "--steamcmd",
-                fields["steamcmd"].get().strip(),
-            ])
+            cmd.extend(
+                [
+                    "--upload",
+                    "--steamcmd",
+                    fields["steamcmd"].get().strip(),
+                ]
+            )
 
             if fields["steam_login"].get().strip():
-                cmd.extend([
-                    "--steam-login",
-                    fields["steam_login"].get().strip(),
-                ])
+                cmd.extend(
+                    [
+                        "--steam-login",
+                        fields["steam_login"].get().strip(),
+                    ]
+                )
 
         return cmd
 
@@ -3079,10 +3357,7 @@ def launch_gui():
                 f"Based on: {estimate_samples} successful build(s)"
             )
         else:
-            timing_var.set(
-                "Elapsed: 0s    "
-                "Estimate: learning from build history"
-            )
+            timing_var.set("Elapsed: 0s    " "Estimate: learning from build history")
 
         build_button.configure(state="disabled")
         validate_button.configure(state="disabled")
@@ -3131,10 +3406,7 @@ def launch_gui():
         if process and process.poll() is None:
             build_state["cancel_requested"] = True
 
-            log(
-                "\n=== CANCELLATION REQUESTED ===\n"
-                f"{current_local_timestamp()}\n\n"
-            )
+            log("\n=== CANCELLATION REQUESTED ===\n" f"{current_local_timestamp()}\n\n")
 
             try:
                 process.terminate()
@@ -3168,9 +3440,7 @@ def launch_gui():
                         build_state.get("started_at")
                     )
 
-                    was_cancelled = bool(
-                        build_state.get("cancel_requested")
-                    )
+                    was_cancelled = bool(build_state.get("cancel_requested"))
 
                     log_path = build_state.get("log_path")
 
@@ -3189,8 +3459,7 @@ def launch_gui():
 
                         messagebox.showwarning(
                             "Meccha builder",
-                            "The build was cancelled.\n\n"
-                            f"Log saved to:\n{log_path}",
+                            "The build was cancelled.\n\n" f"Log saved to:\n{log_path}",
                         )
 
                     elif value == 0:
@@ -3201,9 +3470,7 @@ def launch_gui():
 
                         rebuild_build_statistics()
 
-                        status_var.set(
-                            "Build completed successfully"
-                        )
+                        status_var.set("Build completed successfully")
 
                         show_finished_timing(
                             "Success",
@@ -3224,9 +3491,7 @@ def launch_gui():
                             error=f"Process exited with code {value}",
                         )
 
-                        status_var.set(
-                            f"Build failed with exit code {value}"
-                        )
+                        status_var.set(f"Build failed with exit code {value}")
 
                         show_finished_timing(
                             "Failed",
@@ -3311,9 +3576,7 @@ def launch_gui():
 
         try:
             if WINDOW_ICON_PATH.is_file():
-                history_window.iconbitmap(
-                    default=str(WINDOW_ICON_PATH.resolve())
-                )
+                history_window.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
         except Exception:
             pass
 
@@ -3420,18 +3683,14 @@ def launch_gui():
                         str(record.get("status", "unknown")).title(),
                         configuration.get("plugin", ""),
                         configuration.get("release", ""),
-                        format_duration(
-                            record.get("duration_seconds")
-                        ),
+                        format_duration(record.get("duration_seconds")),
                         exit_code_display,
                     ),
                 )
 
                 record_lookup[build_id] = record
 
-            history_count_var.set(
-                f"{len(record_lookup)} build(s)"
-            )
+            history_count_var.set(f"{len(record_lookup)} build(s)")
 
         def selected_record() -> dict | None:
             selection = tree.selection()
@@ -3563,7 +3822,9 @@ def launch_gui():
         if path and Path(path).exists():
             os.startfile(path)
         else:
-            messagebox.showwarning("Workshop folder", "Workshop folder does not exist yet.")
+            messagebox.showwarning(
+                "Workshop folder", "Workshop folder does not exist yet."
+            )
 
     validate_button = ttk.Button(
         buttons,
@@ -3573,15 +3834,21 @@ def launch_gui():
     validate_button.pack(side="left", padx=(0, 8))
     build_button = ttk.Button(buttons, text="Build Mod", command=start_build)
     build_button.pack(side="left")
-    cancel_button = ttk.Button(buttons, text="Cancel", command=cancel_build, state="disabled")
+    cancel_button = ttk.Button(
+        buttons, text="Cancel", command=cancel_build, state="disabled"
+    )
     cancel_button.pack(side="left", padx=8)
-    ttk.Button(buttons, text="Open Workshop Folder", command=open_workshop).pack(side="left")
+    ttk.Button(buttons, text="Open Workshop Folder", command=open_workshop).pack(
+        side="left"
+    )
     ttk.Button(
         buttons,
         text="Build History",
         command=show_build_history,
     ).pack(side="left", padx=(8, 0))
-    ttk.Button(buttons, text="Refresh Plugins", command=refresh_plugins).pack(side="left", padx=8)
+    ttk.Button(buttons, text="Refresh Plugins", command=refresh_plugins).pack(
+        side="left", padx=8
+    )
     ttk.Button(
         buttons,
         text="Exit",
