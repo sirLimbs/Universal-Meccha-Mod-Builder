@@ -1700,8 +1700,91 @@ def launch_gui():
     row = 0
 
     field_rows = {}
+    path_control_buttons = {}
 
-    def add_entry(label_text, key, browse=None):
+    def copy_field_value(key: str) -> None:
+        """Copy a field value and report it through the non-blocking status area."""
+        value = fields[key].get().strip()
+
+        if not value:
+            status_var.set("Nothing to copy")
+            return
+
+        root.clipboard_clear()
+        root.clipboard_append(value)
+        root.update_idletasks()
+        status_var.set("Copied to clipboard")
+
+    def resolve_field_directory(key: str) -> Path | None:
+        """Resolve the directory represented by a main configuration field."""
+        value = fields[key].get().strip()
+
+        if key == "plugin":
+            project_value = fields["project"].get().strip()
+            plugin_name = value
+
+            if not project_value or not plugin_name:
+                return None
+
+            project_path = Path(project_value).expanduser()
+            project_root = (
+                project_path.parent
+                if project_path.suffix.lower() == ".uproject"
+                else project_path
+            )
+            plugin_path = project_root / "Plugins" / plugin_name
+            return plugin_path if plugin_path.is_dir() else None
+
+        if key == "map":
+            project_value = fields["project"].get().strip()
+            plugin_name = fields["plugin"].get().strip()
+
+            if not project_value or not plugin_name or not value:
+                return None
+
+            project_path = Path(project_value).expanduser()
+
+            if not project_path.is_file():
+                return None
+
+            candidates = find_map_candidates(project_path, plugin_name, value)
+            return candidates[0].parent if candidates else None
+
+        if not value:
+            return None
+
+        path = Path(value).expanduser()
+
+        if key in {"ue", "project"}:
+            return path.parent if path.is_file() else None
+
+        if key == "workshop":
+            return path if path.is_dir() else None
+
+        return path.parent if path.is_file() else (path if path.is_dir() else None)
+
+    def open_field_directory(key: str) -> None:
+        """Open the resolved directory for a configuration field."""
+        directory = resolve_field_directory(key)
+
+        if directory is None:
+            status_var.set("No valid folder could be resolved")
+            return
+
+        open_path_in_windows(directory)
+
+    def update_path_control_states(*_args) -> None:
+        """Enable folder controls only when their destination can be resolved."""
+        for key, controls in path_control_buttons.items():
+            folder_button = controls.get("folder")
+
+            if folder_button is None:
+                continue
+
+            state = "normal" if resolve_field_directory(key) else "disabled"
+            folder_button.configure(state=state)
+
+    def add_entry(label_text, key, browse=None, *, browse_tooltip=None):
         nonlocal row
 
         current_row = row
@@ -1713,17 +1796,49 @@ def launch_gui():
 
         entry = ttk.Entry(form, textvariable=fields[key])
         entry.grid(row=current_row, column=1, sticky="ew", pady=4)
+        entry.bind(
+            "<Double-Button-1>",
+            lambda _event, field_key=key: copy_field_value(field_key),
+            add="+",
+        )
         widgets.append(entry)
 
         ToolTip(label, hints.get(key, ""))
-        ToolTip(entry, hints.get(key, ""))
+        ToolTip(entry, f"{hints.get(key, '')}\n\nDouble-click to copy.".strip())
 
-        if browse:
-            button = ttk.Button(form, text="Browse…", command=browse)
-            button.grid(row=current_row, column=2, padx=(8, 0), pady=4)
-            ToolTip(button, hints.get(key, ""))
-            widgets.append(button)
+        controls = ttk.Frame(form)
+        controls.grid(row=current_row, column=2, padx=(8, 0), pady=4)
+        widgets.append(controls)
 
+        browse_button = ttk.Button(
+            controls,
+            text="🔍",
+            width=3,
+            command=browse if browse else None,
+            state="normal" if browse else "disabled",
+            cursor="hand2",
+        )
+        browse_button.pack(side="left")
+        ToolTip(
+            browse_button,
+            browse_tooltip or hints.get(key, "") or "Browse or select a value.",
+        )
+
+        folder_button = ttk.Button(
+            controls,
+            text="📂",
+            width=3,
+            command=lambda field_key=key: open_field_directory(field_key),
+            state="disabled",
+            cursor="hand2",
+        )
+        folder_button.pack(side="left", padx=(4, 0))
+        ToolTip(folder_button, "Open the resolved folder for this field.")
+
+        path_control_buttons[key] = {
+            "browse": browse_button,
+            "folder": folder_button,
+        }
         field_rows[key] = widgets
         row += 1
         return entry
@@ -1771,21 +1886,87 @@ def launch_gui():
         if value:
             fields["steamcmd"].set(value)
 
-    add_entry("UE RunUAT.bat", "ue", browse_ue)
-    project_entry = add_entry("Meccha .uproject", "project", browse_project)
+    add_entry(
+        "UE RunUAT.bat",
+        "ue",
+        browse_ue,
+        browse_tooltip="Select RunUAT.bat.",
+    )
+    project_entry = add_entry(
+        "Meccha .uproject",
+        "project",
+        browse_project,
+        browse_tooltip="Select the Meccha Unreal project.",
+    )
 
     plugin_label = ttk.Label(form, text="Asset plugin")
     plugin_label.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
-    plugin_combo = ttk.Combobox(form, textvariable=fields["plugin"], state="readonly")
+
+    plugin_combo = ttk.Combobox(
+        form,
+        textvariable=fields["plugin"],
+        state="readonly",
+    )
     plugin_combo.grid(row=row, column=1, sticky="ew", pady=4)
-    refresh_button = ttk.Button(form, text="Refresh", command=lambda: refresh_plugins())
-    refresh_button.grid(row=row, column=2, padx=(8, 0), pady=4)
+    plugin_combo.bind(
+        "<Double-Button-1>",
+        lambda _event: copy_field_value("plugin"),
+        add="+",
+    )
+
+    plugin_controls = ttk.Frame(form)
+    plugin_controls.grid(row=row, column=2, padx=(8, 0), pady=4)
+
+    refresh_button = ttk.Button(
+        plugin_controls,
+        text="🔍",
+        width=3,
+        command=lambda: refresh_plugins(),
+        cursor="hand2",
+    )
+    refresh_button.pack(side="left")
+
+    plugin_folder_button = ttk.Button(
+        plugin_controls,
+        text="📂",
+        width=3,
+        command=lambda: open_field_directory("plugin"),
+        state="disabled",
+        cursor="hand2",
+    )
+    plugin_folder_button.pack(side="left", padx=(4, 0))
+
+    path_control_buttons["plugin"] = {
+        "browse": refresh_button,
+        "folder": plugin_folder_button,
+    }
+
     ToolTip(plugin_label, hints["plugin"])
-    ToolTip(plugin_combo, hints["plugin"])
+    ToolTip(plugin_combo, f"{hints['plugin']}\n\nDouble-click to copy.")
+    ToolTip(refresh_button, "Refresh and select from detected project plugins.")
+    ToolTip(plugin_folder_button, "Open the selected plugin folder.")
     row += 1
 
-    add_entry("Runtime map path", "map")
-    add_entry("Workshop folder", "workshop", browse_workshop)
+    add_entry(
+        "Runtime map path",
+        "map",
+        browse=None,
+        browse_tooltip=(
+            "Runtime package paths are selected inside Unreal. "
+            "The folder button opens a matching .umap location when found."
+        ),
+    )
+    add_entry(
+        "Workshop folder",
+        "workshop",
+        browse_workshop,
+        browse_tooltip="Select the Workshop staging folder.",
+    )
+
+    for traced_key in ("ue", "project", "plugin", "map", "workshop"):
+        fields[traced_key].trace_add("write", update_path_control_states)
+
+    root.after_idle(update_path_control_states)
 
     release_frame = ttk.Frame(form)
     release_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=6)
@@ -2817,6 +2998,7 @@ def launch_gui():
         if fields["plugin"].get() not in plugins:
             fields["plugin"].set("")
         status_var.set(f"Found {len(plugins)} plugin(s); select the asset plugin")
+        update_path_control_states()
 
     def profile_payload():
         return {
