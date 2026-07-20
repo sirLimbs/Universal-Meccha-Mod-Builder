@@ -153,6 +153,241 @@ def append_build_history_record(record: dict) -> None:
     records.append(record)
     save_build_history(records)
 
+
+def update_build_history_record(
+    build_id: str,
+    updates: dict,
+) -> bool:
+    """
+    Update an existing build-history record.
+
+    Returns True when the record was found.
+    """
+    records = load_build_history()
+    record_found = False
+
+    for record in records:
+        if record.get("id") == build_id:
+            record.update(updates)
+            record_found = True
+            break
+
+    if record_found:
+        save_build_history(records)
+
+    return record_found
+
+def classify_build_mode(configuration: dict) -> str:
+    """
+    Return a stable key describing the selected build workflow.
+
+    Examples:
+        full_mod
+        full_only
+        mod_only
+        copy_only
+        full_mod_upload
+    """
+    if not isinstance(configuration, dict):
+        return "unknown"
+
+    flags = configuration.get("flags", {})
+
+    if not isinstance(flags, dict):
+        flags = {}
+
+    build_full = bool(flags.get("build_full"))
+    build_mod = bool(flags.get("build_mod"))
+    copy_only = bool(flags.get("copy_only"))
+    upload = bool(flags.get("upload"))
+
+    if copy_only:
+        base_mode = "copy_only"
+    elif build_full and build_mod:
+        base_mode = "full_mod"
+    elif build_full:
+        base_mode = "full_only"
+    elif build_mod:
+        base_mode = "mod_only"
+    else:
+        base_mode = "no_build"
+
+    if upload:
+        return f"{base_mode}_upload"
+
+    return base_mode
+
+def describe_build_mode(mode: str) -> str:
+    """Convert an internal build mode key into a readable label."""
+    labels = {
+        "full_mod": "Full Game + My Mod",
+        "full_only": "Full Game only",
+        "mod_only": "My Mod only",
+        "copy_only": "Copy only",
+        "no_build": "No Unreal build",
+        "full_mod_upload": "Full Game + My Mod + Upload",
+        "full_only_upload": "Full Game + Upload",
+        "mod_only_upload": "My Mod + Upload",
+        "copy_only_upload": "Copy only + Upload",
+        "no_build_upload": "Upload only",
+        "unknown": "Unknown",
+    }
+
+    return labels.get(mode, mode.replace("_", " ").title())
+
+def default_build_statistics() -> dict:
+    """Return the initial build-statistics structure."""
+    return {
+        "version": 1,
+        "updated_at": None,
+        "modes": {},
+    }
+
+def load_build_statistics() -> dict:
+    """Load persisted build timing statistics."""
+    data = load_json_file(
+        BUILD_STATISTICS_FILE,
+        default_build_statistics(),
+    )
+
+    if not isinstance(data, dict):
+        return default_build_statistics()
+
+    if not isinstance(data.get("modes"), dict):
+        data["modes"] = {}
+
+    data.setdefault("version", 1)
+    data.setdefault("updated_at", None)
+
+    return data
+
+def save_build_statistics(statistics: dict) -> None:
+    """Save build timing statistics."""
+    statistics["updated_at"] = current_local_timestamp()
+    save_json_file(BUILD_STATISTICS_FILE, statistics)
+
+def calculate_median(values: list[float]) -> float | None:
+    """Return the median of numeric values without external dependencies."""
+    cleaned = []
+
+    for value in values:
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            continue
+
+        if numeric_value > 0:
+            cleaned.append(numeric_value)
+
+    if not cleaned:
+        return None
+
+    cleaned.sort()
+    count = len(cleaned)
+    midpoint = count // 2
+
+    if count % 2:
+        return cleaned[midpoint]
+
+    return (
+        cleaned[midpoint - 1] + cleaned[midpoint]
+    ) / 2
+
+def rebuild_build_statistics() -> dict:
+    """
+    Recalculate timing statistics from successful build-history records.
+
+    Only the newest 20 successful durations per build mode are retained.
+    """
+    records = load_build_history()
+    durations_by_mode = {}
+
+    for record in records:
+        if record.get("status") != "success":
+            continue
+
+        duration = record.get("duration_seconds")
+
+        try:
+            duration = float(duration)
+        except (TypeError, ValueError):
+            continue
+
+        if duration <= 0:
+            continue
+
+        configuration = record.get("configuration", {})
+        mode = classify_build_mode(configuration)
+
+        durations_by_mode.setdefault(mode, []).append(duration)
+
+    statistics = default_build_statistics()
+
+    for mode, durations in durations_by_mode.items():
+        recent_durations = durations[-20:]
+        median_duration = calculate_median(recent_durations)
+
+        statistics["modes"][mode] = {
+            "sample_count": len(recent_durations),
+            "median_seconds": (
+                round(median_duration, 2)
+                if median_duration is not None
+                else None
+            ),
+            "minimum_seconds": round(min(recent_durations), 2),
+            "maximum_seconds": round(max(recent_durations), 2),
+            "recent_durations": [
+                round(value, 2)
+                for value in recent_durations
+            ],
+        }
+
+    save_build_statistics(statistics)
+    return statistics
+
+def get_build_time_estimate(
+    configuration: dict,
+) -> dict:
+    """
+    Return an estimate for the supplied configuration.
+
+    A minimum of two successful comparable builds is required before showing
+    an estimated total.
+    """
+    mode = classify_build_mode(configuration)
+    statistics = load_build_statistics()
+    mode_statistics = statistics.get("modes", {}).get(mode, {})
+
+    sample_count = mode_statistics.get("sample_count", 0)
+    median_seconds = mode_statistics.get("median_seconds")
+
+    try:
+        sample_count = int(sample_count)
+    except (TypeError, ValueError):
+        sample_count = 0
+
+    try:
+        median_seconds = float(median_seconds)
+    except (TypeError, ValueError):
+        median_seconds = None
+
+    if sample_count < 2 or not median_seconds or median_seconds <= 0:
+        return {
+            "available": False,
+            "mode": mode,
+            "mode_label": describe_build_mode(mode),
+            "sample_count": sample_count,
+            "estimated_seconds": None,
+        }
+
+    return {
+        "available": True,
+        "mode": mode,
+        "mode_label": describe_build_mode(mode),
+        "sample_count": sample_count,
+        "estimated_seconds": median_seconds,
+    }
+
 def format_duration(seconds) -> str:
     """Format a duration as seconds, minutes, or hours."""
     if seconds is None:
@@ -923,7 +1158,7 @@ def launch_gui():
     root.title(f"Universal Meccha Mod Builder v{APP_VERSION}")
 
     interrupted_build_count = mark_interrupted_builds()
-
+    rebuild_build_statistics()
 
     def apply_window_icon():
         try:
@@ -1390,14 +1625,32 @@ def launch_gui():
 
     status_frame = ttk.Frame(outer)
     status_frame.pack(fill="x", pady=(10, 4))
+
+    status_left = ttk.Frame(status_frame)
+    status_left.pack(side="left", fill="x", expand=True)
+
     status_var = tk.StringVar(value="Ready")
     if interrupted_build_count:
         status_var.set(
             f"Recovered {interrupted_build_count} interrupted build record(s)"
         )
 
-    ttk.Label(status_frame, textvariable=status_var).pack(side="left")
-    progress = ttk.Progressbar(status_frame, mode="indeterminate", length=180)
+    ttk.Label(
+        status_left,
+        textvariable=status_var,
+    ).pack(anchor="w")
+
+    timing_var = tk.StringVar(value="Elapsed: —    Estimate: —")
+    ttk.Label(
+        status_left,
+        textvariable=timing_var,
+    ).pack(anchor="w", pady=(2, 0))
+
+    progress = ttk.Progressbar(
+        status_frame,
+        mode="indeterminate",
+        length=180,
+    )
     progress.pack(side="right")
 
     output_box = scrolledtext.ScrolledText(
@@ -1420,6 +1673,9 @@ def launch_gui():
         "started_at": None,
         "cancel_requested": False,
         "record_active": False,
+        "estimated_seconds": None,
+        "estimate_sample_count": 0,
+        "mode": None,
     }
 
     def redact_command_for_log(cmd: list[str]) -> list[str]:
@@ -1465,6 +1721,55 @@ def launch_gui():
         output_box.configure(state="disabled")
 
         append_to_active_log(text)
+
+    def update_build_timing_display():
+        """Refresh elapsed, estimated, and remaining build time."""
+        process = process_holder.get("process")
+        started_at = build_state.get("started_at")
+
+        if (
+            process is None
+            or process.poll() is not None
+            or started_at is None
+        ):
+            return
+
+        elapsed_seconds = calculate_duration_seconds(started_at)
+
+        if elapsed_seconds is None:
+            timing_var.set("Elapsed: —    Estimate: —")
+            return
+
+        estimated_seconds = build_state.get("estimated_seconds")
+
+        if estimated_seconds:
+            remaining_seconds = max(
+                0,
+                float(estimated_seconds) - elapsed_seconds,
+            )
+
+            timing_var.set(
+                f"Elapsed: {format_duration(elapsed_seconds)}    "
+                f"Estimated total: {format_duration(estimated_seconds)}    "
+                f"Remaining: ~{format_duration(remaining_seconds)}"
+            )
+        else:
+            timing_var.set(
+                f"Elapsed: {format_duration(elapsed_seconds)}    "
+                "Estimate: learning from build history"
+            )
+
+        root.after(1000, update_build_timing_display)
+
+    def show_finished_timing(
+        status: str,
+        duration_seconds,
+    ) -> None:
+        """Show the final elapsed duration after a build ends."""
+        timing_var.set(
+            f"Elapsed: {format_duration(duration_seconds)}    "
+            f"Result: {status}"
+        )
 
     def create_build_snapshot() -> dict:
         """
@@ -1522,6 +1827,15 @@ def launch_gui():
         safe_command = redact_command_for_log(cmd)
         safe_command_text = subprocess.list2cmdline(safe_command)
 
+        configuration = create_build_snapshot()
+        estimate = get_build_time_estimate(configuration)
+
+        build_state.update({
+            "estimated_seconds": estimate.get("estimated_seconds"),
+            "estimate_sample_count": estimate.get("sample_count", 0),
+            "mode": estimate.get("mode"),
+        })
+
         record = {
             "id": build_id,
             "app_version": APP_VERSION,
@@ -1533,7 +1847,13 @@ def launch_gui():
             "error": "",
             "log_path": str(log_path),
             "command": safe_command_text,
-            "configuration": create_build_snapshot(),
+            "configuration": configuration,
+            "estimate": {
+                "mode": estimate.get("mode"),
+                "mode_label": estimate.get("mode_label"),
+                "sample_count": estimate.get("sample_count", 0),
+                "estimated_seconds": estimate.get("estimated_seconds"),
+            },
         }
 
         append_build_history_record(record)
@@ -1548,6 +1868,11 @@ def launch_gui():
             f"Plugin:         {record['configuration']['plugin']}\n"
             f"Map:            {record['configuration']['map']}\n"
             f"Release:        {record['configuration']['release']}\n"
+            f"Build Mode:     {estimate.get('mode_label', 'Unknown')}\n"
+            f"Estimate:       "
+            f"{format_duration(estimate.get('estimated_seconds'))}\n"
+            f"Estimate Data:  "
+            f"{estimate.get('sample_count', 0)} successful build(s)\n"
             f"Workshop:       {record['configuration']['workshop']}\n"
             f"Published ID:   {record['configuration']['publishedfileid']}\n"
             "\n"
@@ -1613,6 +1938,9 @@ def launch_gui():
             "started_at": None,
             "cancel_requested": False,
             "record_active": False,
+            "estimated_seconds": None,
+            "estimate_sample_count": 0,
+            "mode": None,
         })
 
     def refresh_plugins():
@@ -2390,6 +2718,45 @@ def launch_gui():
                     ),
                 ))
 
+        # ---------------------------------------------------------
+        # Historical build-time estimate
+        # ---------------------------------------------------------
+        estimate_configuration = {
+            "flags": {
+                key: bool(variable.get())
+                for key, variable in flags.items()
+            },
+        }
+
+        estimate = get_build_time_estimate(
+            estimate_configuration
+        )
+
+        if estimate["available"]:
+            results.append(validation_result(
+                "pass",
+                "Historical build-time estimate is available",
+                (
+                    f"Mode: {estimate['mode_label']}\n"
+                    f"Estimated total: "
+                    f"{format_duration(estimate['estimated_seconds'])}\n"
+                    f"Based on {estimate['sample_count']} successful "
+                    "comparable build(s)."
+                ),
+            ))
+        else:
+            results.append(validation_result(
+                "warning",
+                "Build-time estimate is still learning",
+                (
+                    f"Mode: {estimate['mode_label']}\n"
+                    f"Successful comparable builds: "
+                    f"{estimate['sample_count']}\n\n"
+                    "At least two successful builds in this mode are needed "
+                    "before an estimate is shown."
+                ),
+            ))
+
         return results
 
     def show_preflight_report(results):
@@ -2692,6 +3059,7 @@ def launch_gui():
                 error=error_text,
             )
 
+            timing_var.set("Elapsed: 0s    Result: Launch error")
             reset_active_build_state()
 
             messagebox.showerror(
@@ -2701,11 +3069,28 @@ def launch_gui():
             return
 
         process_holder["process"] = process
+        estimate_seconds = build_state.get("estimated_seconds")
+        estimate_samples = build_state.get("estimate_sample_count", 0)
+
+        if estimate_seconds:
+            timing_var.set(
+                "Elapsed: 0s    "
+                f"Estimated total: {format_duration(estimate_seconds)}    "
+                f"Based on: {estimate_samples} successful build(s)"
+            )
+        else:
+            timing_var.set(
+                "Elapsed: 0s    "
+                "Estimate: learning from build history"
+            )
+
         build_button.configure(state="disabled")
         validate_button.configure(state="disabled")
         cancel_button.configure(state="normal")
         progress.start(10)
         status_var.set("Building…")
+        update_build_timing_display()
+
         threading.Thread(target=reader_thread, args=(process,), daemon=True).start()
 
     def close_application():
@@ -2778,9 +3163,16 @@ def launch_gui():
                     cancel_button.configure(state="disabled")
                     process_holder["process"] = None
 
+                    # Calculate this once before entering any result branch.
+                    final_duration = calculate_duration_seconds(
+                        build_state.get("started_at")
+                    )
+
                     was_cancelled = bool(
                         build_state.get("cancel_requested")
                     )
+
+                    log_path = build_state.get("log_path")
 
                     if was_cancelled:
                         finish_build_record(
@@ -2790,10 +3182,15 @@ def launch_gui():
 
                         status_var.set("Build cancelled")
 
+                        show_finished_timing(
+                            "Cancelled",
+                            final_duration,
+                        )
+
                         messagebox.showwarning(
                             "Meccha builder",
                             "The build was cancelled.\n\n"
-                            f"Log saved to:\n{build_state['log_path']}",
+                            f"Log saved to:\n{log_path}",
                         )
 
                     elif value == 0:
@@ -2802,14 +3199,22 @@ def launch_gui():
                             exit_code=value,
                         )
 
+                        rebuild_build_statistics()
+
                         status_var.set(
                             "Build completed successfully"
+                        )
+
+                        show_finished_timing(
+                            "Success",
+                            final_duration,
                         )
 
                         messagebox.showinfo(
                             "Meccha builder",
                             "Build completed successfully.\n\n"
-                            f"Log saved to:\n{build_state['log_path']}",
+                            f"Duration: {format_duration(final_duration)}\n"
+                            f"Log saved to:\n{log_path}",
                         )
 
                     else:
@@ -2823,11 +3228,17 @@ def launch_gui():
                             f"Build failed with exit code {value}"
                         )
 
+                        show_finished_timing(
+                            "Failed",
+                            final_duration,
+                        )
+
                         messagebox.showerror(
                             "Meccha builder",
                             f"Build failed with exit code {value}.\n"
                             "Review the log.\n\n"
-                            f"Log saved to:\n{build_state['log_path']}",
+                            f"Duration: {format_duration(final_duration)}\n"
+                            f"Log saved to:\n{log_path}",
                         )
 
                     reset_active_build_state()
@@ -2838,6 +3249,10 @@ def launch_gui():
                     validate_button.configure(state="normal")
                     cancel_button.configure(state="disabled")
                     process_holder["process"] = None
+
+                    final_duration = calculate_duration_seconds(
+                        build_state.get("started_at")
+                    )
 
                     error_text = str(value)
                     log_path = build_state.get("log_path")
@@ -2850,9 +3265,15 @@ def launch_gui():
 
                     status_var.set("Build failed")
 
+                    show_finished_timing(
+                        "Failed",
+                        final_duration,
+                    )
+
                     messagebox.showerror(
                         "Meccha builder",
                         f"{error_text}\n\n"
+                        f"Duration: {format_duration(final_duration)}\n"
                         f"Log saved to:\n{log_path}",
                     )
 
@@ -3051,6 +3472,11 @@ def launch_gui():
 
             configuration = record.get("configuration", {})
 
+            estimate = record.get("estimate", {})
+
+            if not isinstance(estimate, dict):
+                estimate = {}
+
             if not isinstance(configuration, dict):
                 configuration = {}
 
@@ -3061,6 +3487,12 @@ def launch_gui():
                 f"Finished: {record.get('finished_at') or '—'}\n"
                 f"Duration: "
                 f"{format_duration(record.get('duration_seconds'))}\n"
+                f"Build mode: "
+                f"{estimate.get('mode_label') or describe_build_mode(classify_build_mode(configuration))}\n"
+                f"Original estimate: "
+                f"{format_duration(estimate.get('estimated_seconds'))}\n"
+                f"Estimate samples: "
+                f"{estimate.get('sample_count', 0)}\n"
                 f"Exit code: "
                 f"{record.get('exit_code') if record.get('exit_code') is not None else '—'}\n\n"
                 f"Project:\n{configuration.get('project', '')}\n\n"
