@@ -1,4 +1,4 @@
-# =============================================================================
+
 # Imports
 # =============================================================================
 
@@ -808,8 +808,7 @@ def escape_vdf_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def write_vdf(
-    vdf_path_out,
+def build_vdf_text(
     appid,
     publishedfileid,
     contentfolder,
@@ -818,8 +817,9 @@ def write_vdf(
     description,
     changenote,
     visibility,
-):
-    text = f"""\"workshopitem\"
+) -> str:
+    """Return the exact Steam Workshop VDF content used for uploads."""
+    return f"""\"workshopitem\"
 {{
     \"appid\"                 \"{escape_vdf_value(appid)}\"
     \"publishedfileid\"       \"{escape_vdf_value(publishedfileid)}\"
@@ -831,6 +831,49 @@ def write_vdf(
     \"changenote\"            \"{escape_vdf_value(changenote)}\"
 }}
 """
+
+
+def read_published_file_id_from_vdf(vdf_path: Path) -> str:
+    """Return a non-zero Published File ID written into a Workshop VDF."""
+    try:
+        text = Path(vdf_path).read_text(encoding="utf-8-sig")
+    except OSError:
+        return ""
+
+    match = re.search(
+        r'"publishedfileid"\s+"(\d+)"',
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return ""
+
+    published_file_id = match.group(1)
+    return published_file_id if published_file_id != "0" else ""
+
+
+def write_vdf(
+    vdf_path_out,
+    appid,
+    publishedfileid,
+    contentfolder,
+    previewfile,
+    title,
+    description,
+    changenote,
+    visibility,
+):
+    text = build_vdf_text(
+        appid,
+        publishedfileid,
+        contentfolder,
+        previewfile,
+        title,
+        description,
+        changenote,
+        visibility,
+    )
     vdf_path_out.write_text(text, encoding="utf-8")
     print(f"Wrote VDF: {vdf_path_out}")
 
@@ -1282,27 +1325,51 @@ def launch_gui():
     interrupted_build_count = mark_interrupted_builds()
     rebuild_build_statistics()
 
-    def apply_window_icon():
-        try:
-            if WINDOW_ICON_PATH.is_file():
-                root.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
-            else:
-                print(f"ICO file does not exist: {WINDOW_ICON_PATH}")
-        except Exception as exc:
-            print(f"iconbitmap failed: {exc}")
-
-    apply_window_icon()
-
-    try:
-        if WINDOW_ICON_PATH.exists():
-            root.iconbitmap(default=str(WINDOW_ICON_PATH))
-    except Exception as exc:
-        print("Could not set initial window icon:", exc)
-
     branding_refs = {
         "window_icon": None,
         "header_logo": None,
     }
+
+    def apply_window_icon():
+        """
+        Apply the application icon using both iconphoto and iconbitmap.
+
+        iconphoto provides a reliable taskbar/title-bar icon when running the
+        Python script, while iconbitmap preserves the native Windows ICO path
+        used by packaged builds.
+        """
+        photo_icon = branding_refs.get("window_icon")
+
+        if photo_icon is None and HEADER_LOGO_PATH.is_file():
+            try:
+                if pillow_available:
+                    image = Image.open(HEADER_LOGO_PATH).convert("RGBA")
+                    photo_icon = ImageTk.PhotoImage(image)
+                else:
+                    photo_icon = tk.PhotoImage(file=str(HEADER_LOGO_PATH.resolve()))
+
+                branding_refs["window_icon"] = photo_icon
+            except Exception as exc:
+                print(f"Could not load PNG window icon: {exc}")
+
+        if photo_icon is not None:
+            try:
+                root.iconphoto(True, photo_icon)
+            except Exception as exc:
+                print(f"iconphoto failed: {exc}")
+
+        if WINDOW_ICON_PATH.is_file():
+            try:
+                root.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
+            except Exception as exc:
+                print(f"iconbitmap failed: {exc}")
+        elif photo_icon is None:
+            print(
+                "Application icon files were not found: "
+                f"{WINDOW_ICON_PATH} or {HEADER_LOGO_PATH}"
+            )
+
+    apply_window_icon()
     root.geometry("1060x760")
     root.minsize(820, 560)
     root.after_idle(apply_window_icon)
@@ -1398,6 +1465,7 @@ def launch_gui():
             "select": "#365f9d",
             "console_bg": "#0f1216",
             "console_fg": "#dbe7ff",
+            "danger": "#b93f4a",
         },
         "light": {
             "bg": "#f2f3f5",
@@ -1409,6 +1477,7 @@ def launch_gui():
             "select": "#b7d5ff",
             "console_bg": "#ffffff",
             "console_fg": "#1e2329",
+            "danger": "#b83843",
         },
     }
 
@@ -1422,8 +1491,46 @@ def launch_gui():
         style.configure("TLabelframe", background=c["bg"], foreground=c["fg"])
         style.configure("TLabelframe.Label", background=c["bg"], foreground=c["fg"])
         style.configure("TLabel", background=c["bg"], foreground=c["fg"])
-        style.configure("TButton", background=c["panel"], foreground=c["fg"], padding=5)
-        style.map("TButton", background=[("active", c["accent"])])
+        style.configure(
+            "TButton",
+            background=c["panel"],
+            foreground=c["fg"],
+            padding=5,
+        )
+        style.map(
+            "TButton",
+            background=[("active", c["accent"])],
+        )
+        style.configure(
+            "Primary.TButton",
+            background=c["accent"],
+            foreground="#ffffff",
+            padding=(12, 7),
+            font=("Segoe UI", 9, "bold"),
+        )
+        style.map(
+            "Primary.TButton",
+            background=[
+                ("disabled", c["panel"]),
+                ("pressed", c["select"]),
+                ("active", c["select"]),
+            ],
+            foreground=[("disabled", c["muted"])],
+        )
+        style.configure(
+            "Danger.TButton",
+            background=c["danger"],
+            foreground="#ffffff",
+            padding=(10, 6),
+        )
+        style.map(
+            "Danger.TButton",
+            background=[
+                ("disabled", c["panel"]),
+                ("active", c["danger"]),
+            ],
+            foreground=[("disabled", c["muted"])],
+        )
         style.configure("TCheckbutton", background=c["bg"], foreground=c["fg"])
         style.map("TCheckbutton", background=[("active", c["bg"])])
         style.configure("TEntry", fieldbackground=c["field"], foreground=c["fg"])
@@ -1531,18 +1638,72 @@ def launch_gui():
     header_text = ttk.Frame(header)
     header_text.pack(side="left", fill="x", expand=True)
 
+    title_row = ttk.Frame(header_text)
+    title_row.pack(fill="x")
+
     ttk.Label(
-        header_text,
+        title_row,
         text="Universal Meccha Mod Builder",
-        anchor="w",
         font=("Segoe UI", 16, "bold"),
-    ).pack(fill="x")
+    ).pack(side="left")
+
+    ttk.Label(
+        title_row,
+        text="by Limbs",
+        font=("Segoe UI", 9, "italic"),
+        foreground="#888888",
+    ).pack(side="left", padx=(10, 0), pady=(7, 0))
 
     ttk.Label(
         header_text,
         text="Build, package, and publish custom Meccha Chameleon maps",
         anchor="w",
     ).pack(fill="x")
+
+    # Profile area
+    profile_bar = ttk.Frame(header, padding=6)
+    profile_bar.pack(
+        side="right",
+        padx=(12, 0),
+        pady=(26, 0),   # moves the profile area downward
+        anchor="n",
+    )
+
+    profile_var = tk.StringVar()
+
+    # Profile icon
+    profile_icon = ttk.Label(
+        profile_bar,
+        text="👤",
+        font=("Segoe UI Emoji", 12),
+        cursor="hand2",
+    )
+    profile_icon.grid(
+        row=0,
+        column=0,
+        padx=(0, 6),
+        pady=(0, 5),
+        sticky="w",
+    )
+
+    ToolTip(profile_icon, "Profile")
+
+    # Profile dropdown
+    profile_combo = ttk.Combobox(
+        profile_bar,
+        textvariable=profile_var,
+        state="readonly",
+        width=28,
+    )
+    profile_combo.grid(
+        row=0,
+        column=1,
+        columnspan=4,
+        sticky="ew",
+        pady=(0, 5),
+    )
+
+    ToolTip(profile_combo, hints["profiles"])
 
     form = ttk.LabelFrame(outer, text="Build configuration", padding=10)
     form.pack(fill="x")
@@ -1636,7 +1797,6 @@ def launch_gui():
 
     add_entry("Runtime map path", "map")
     add_entry("Workshop folder", "workshop", browse_workshop)
-    add_entry("Preview image", "preview", browse_preview)
 
     release_frame = ttk.Frame(form)
     release_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=6)
@@ -1680,16 +1840,19 @@ def launch_gui():
     def open_workshop_manager():
         dialog = tk.Toplevel(root)
         dialog.title("Workshop Manager")
-        dialog.geometry("760x690")
+        dialog.geometry("780x720")
         dialog.minsize(680, 580)
         dialog.transient(root)
         dialog.grab_set()
 
         try:
+            photo_icon = branding_refs.get("window_icon")
+            if photo_icon is not None:
+                dialog.iconphoto(True, photo_icon)
             if WINDOW_ICON_PATH.is_file():
                 dialog.iconbitmap(default=str(WINDOW_ICON_PATH.resolve()))
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"Could not set Workshop Manager icon: {exc}")
 
         original_published_id = fields["publishedfileid"].get().strip()
         remembered_published_id = (
@@ -1717,10 +1880,12 @@ def launch_gui():
         steamcmd_var = tk.StringVar(value=fields["steamcmd"].get())
         steam_login_var = tk.StringVar(value=fields["steam_login"].get())
         upload_var = tk.BooleanVar(value=flags["upload"].get())
+        action_refs = {}
 
         container = ttk.Frame(dialog, padding=14)
         container.pack(fill="both", expand=True)
         container.columnconfigure(1, weight=1)
+        container.rowconfigure(3, weight=1)
 
         ttk.Label(
             container,
@@ -1749,6 +1914,8 @@ def launch_gui():
                     published_id_var.set(remembered_published_id)
                 published_id_entry.configure(state="normal")
 
+            update_workshop_action_state()
+
         ttk.Radiobutton(
             mode_frame,
             text="Create new item",
@@ -1764,19 +1931,95 @@ def launch_gui():
             command=sync_mode,
         ).pack(side="left")
 
-        def add_dialog_entry(row_index, label_text, variable, browse_command=None, *, readonly=False):
-            ttk.Label(container, text=label_text).grid(
-                row=row_index, column=0, sticky="w", padx=(0, 8), pady=4
+        details_frame = ttk.LabelFrame(
+            container,
+            text="Workshop item details",
+            padding=(0, 6, 0, 0),
+        )
+        details_frame.grid(
+            row=3,
+            column=0,
+            columnspan=3,
+            sticky="nsew",
+            pady=(0, 10),
+        )
+        details_frame.columnconfigure(0, weight=1)
+        details_frame.rowconfigure(0, weight=1)
+
+        details_canvas = tk.Canvas(
+            details_frame,
+            height=300,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        details_scrollbar = ttk.Scrollbar(
+            details_frame,
+            orient="vertical",
+            command=details_canvas.yview,
+        )
+        details_canvas.configure(yscrollcommand=details_scrollbar.set)
+
+        details_canvas.grid(row=0, column=0, sticky="nsew")
+        details_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        details_content = ttk.Frame(details_canvas, padding=(10, 4, 10, 10))
+        details_content.columnconfigure(1, weight=1)
+        details_window = details_canvas.create_window(
+            (0, 0),
+            window=details_content,
+            anchor="nw",
+        )
+
+        def update_details_scroll_region(_event=None):
+            details_canvas.configure(scrollregion=details_canvas.bbox("all"))
+
+        def match_details_canvas_width(event):
+            details_canvas.itemconfigure(details_window, width=event.width)
+
+        details_content.bind("<Configure>", update_details_scroll_region)
+        details_canvas.bind("<Configure>", match_details_canvas_width)
+
+        def scroll_details(event):
+            if event.delta:
+                details_canvas.yview_scroll(int(-event.delta / 120), "units")
+                return "break"
+            return None
+
+        def bind_details_mousewheel(_event=None):
+            details_canvas.bind_all("<MouseWheel>", scroll_details)
+
+        def unbind_details_mousewheel(_event=None):
+            details_canvas.unbind_all("<MouseWheel>")
+
+        details_canvas.bind("<Enter>", bind_details_mousewheel)
+        details_canvas.bind("<Leave>", unbind_details_mousewheel)
+        details_content.bind("<Enter>", bind_details_mousewheel)
+        details_content.bind("<Leave>", unbind_details_mousewheel)
+
+        def add_dialog_entry(
+            row_index,
+            label_text,
+            variable,
+            browse_command=None,
+            *,
+            readonly=False,
+        ):
+            ttk.Label(details_content, text=label_text).grid(
+                row=row_index,
+                column=0,
+                sticky="w",
+                padx=(0, 8),
+                pady=4,
             )
             entry = ttk.Entry(
-                container,
+                details_content,
                 textvariable=variable,
                 state="readonly" if readonly else "normal",
             )
             entry.grid(row=row_index, column=1, sticky="ew", pady=4)
             if browse_command:
                 ttk.Button(
-                    container,
+                    details_content,
                     text="Browse…",
                     command=browse_command,
                     cursor="hand2",
@@ -1814,43 +2057,58 @@ def launch_gui():
             if value:
                 steamcmd_var.set(value)
 
-        add_dialog_entry(3, "Workshop folder", workshop_var, choose_workshop_folder)
-        add_dialog_entry(4, "Preview image", preview_var, choose_preview_image)
-        add_dialog_entry(5, "Steam App ID", appid_var, readonly=True)
+        add_dialog_entry(0, "Workshop folder", workshop_var, choose_workshop_folder)
+        add_dialog_entry(1, "Preview image", preview_var, choose_preview_image)
+        add_dialog_entry(2, "Steam App ID", appid_var, readonly=True)
         published_id_entry = add_dialog_entry(
-            6, "Published File ID", published_id_var
+            3,
+            "Published File ID",
+            published_id_var,
         )
 
-        ttk.Label(container, text="Visibility").grid(
-            row=7, column=0, sticky="w", padx=(0, 8), pady=4
+        ttk.Label(details_content, text="Visibility").grid(
+            row=4,
+            column=0,
+            sticky="w",
+            padx=(0, 8),
+            pady=4,
         )
         visibility_combo = ttk.Combobox(
-            container,
+            details_content,
             textvariable=visibility_var,
             values=["0", "1", "2"],
             state="readonly",
         )
-        visibility_combo.grid(row=7, column=1, sticky="ew", pady=4)
+        visibility_combo.grid(row=4, column=1, sticky="ew", pady=4)
 
-        add_dialog_entry(8, "Workshop title", title_var)
+        add_dialog_entry(5, "Workshop title", title_var)
 
-        ttk.Label(container, text="Description").grid(
-            row=9, column=0, sticky="nw", padx=(0, 8), pady=4
+        ttk.Label(details_content, text="Description").grid(
+            row=6,
+            column=0,
+            sticky="nw",
+            padx=(0, 8),
+            pady=4,
         )
         description_text = tk.Text(
-            container,
-            height=5,
+            details_content,
+            height=4,
             wrap="word",
             font=("Segoe UI", 10),
         )
-        description_text.grid(row=9, column=1, columnspan=2, sticky="nsew", pady=4)
+        description_text.grid(
+            row=6,
+            column=1,
+            columnspan=2,
+            sticky="ew",
+            pady=4,
+        )
         description_text.insert("1.0", fields["description"].get())
-        container.rowconfigure(9, weight=1)
 
-        add_dialog_entry(10, "Change note", changenote_var)
+        add_dialog_entry(7, "Change note", changenote_var)
 
         upload_frame = ttk.LabelFrame(container, text="SteamCMD upload", padding=10)
-        upload_frame.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        upload_frame.grid(row=4, column=0, columnspan=3, sticky="ew")
         upload_frame.columnconfigure(1, weight=1)
 
         upload_check = ttk.Checkbutton(
@@ -1900,19 +2158,155 @@ def launch_gui():
                     parent=dialog,
                 )
 
-        def open_workshop_page():
+        mode_status_var = tk.StringVar()
+
+        def current_workshop_url() -> str:
             published_id = published_id_var.get().strip()
+
             if not published_id.isdigit() or published_id == "0":
+                return ""
+
+            return (
+                "https://steamcommunity.com/sharedfiles/filedetails/?id="
+                + published_id
+            )
+
+        def update_workshop_action_state(*_args):
+            workshop_url = current_workshop_url()
+            button_state = "normal" if workshop_url else "disabled"
+
+            if "open_page_button" in action_refs:
+                action_refs["open_page_button"].configure(state=button_state)
+                action_refs["copy_url_button"].configure(state=button_state)
+
+            if mode_var.get() == "create":
+                mode_status_var.set(
+                    "A new Workshop item will be created during upload. "
+                    "The Published File ID will be recovered afterward when SteamCMD "
+                    "writes it into the VDF."
+                )
+            elif workshop_url:
+                mode_status_var.set(
+                    f"Builds will update Workshop item {published_id_var.get().strip()}."
+                )
+            else:
+                mode_status_var.set(
+                    "Enter a non-zero numeric Published File ID to update an item."
+                )
+
+        def open_workshop_page():
+            workshop_url = current_workshop_url()
+
+            if not workshop_url:
                 messagebox.showwarning(
                     "Workshop page",
                     "Enter an existing numeric Published File ID first.",
                     parent=dialog,
                 )
                 return
-            webbrowser.open(
-                "https://steamcommunity.com/sharedfiles/filedetails/?id="
-                + published_id
+
+            webbrowser.open(workshop_url)
+
+        def copy_workshop_url():
+            workshop_url = current_workshop_url()
+
+            if not workshop_url:
+                messagebox.showwarning(
+                    "Workshop page",
+                    "Enter an existing numeric Published File ID first.",
+                    parent=dialog,
+                )
+                return
+
+            dialog.clipboard_clear()
+            dialog.clipboard_append(workshop_url)
+            dialog.update_idletasks()
+            status_var.set("Workshop URL copied to clipboard")
+
+        def preview_vdf():
+            workshop_text = workshop_var.get().strip()
+            preview_text = preview_var.get().strip()
+
+            if not workshop_text or not preview_text:
+                messagebox.showwarning(
+                    "VDF Preview",
+                    "Select both a Workshop folder and preview image first.",
+                    parent=dialog,
+                )
+                return
+
+            workshop_path = Path(workshop_text).expanduser()
+            preview_source = Path(preview_text).expanduser()
+            preview_destination = workshop_path / preview_source.name
+
+            preview_text_value = build_vdf_text(
+                appid_var.get().strip() or MECCHA_APP_ID,
+                "0" if mode_var.get() == "create" else published_id_var.get().strip(),
+                workshop_path,
+                preview_destination,
+                title_var.get(),
+                description_text.get("1.0", "end-1c"),
+                changenote_var.get(),
+                visibility_var.get().strip() or "2",
             )
+
+            preview_window = tk.Toplevel(dialog)
+            preview_window.title("Workshop VDF Preview")
+            preview_window.geometry("760x540")
+            preview_window.minsize(620, 420)
+            preview_window.transient(dialog)
+            preview_window.grab_set()
+
+            try:
+                if WINDOW_ICON_PATH.is_file():
+                    preview_window.iconbitmap(
+                        default=str(WINDOW_ICON_PATH.resolve())
+                    )
+            except Exception:
+                pass
+
+            preview_container = ttk.Frame(preview_window, padding=14)
+            preview_container.pack(fill="both", expand=True)
+
+            ttk.Label(
+                preview_container,
+                text="Generated Workshop VDF",
+                font=("Segoe UI", 15, "bold"),
+            ).pack(anchor="w")
+            ttk.Label(
+                preview_container,
+                text=(
+                    "Read-only preview of the exact metadata that will be written "
+                    "to my_item.vdf."
+                ),
+                wraplength=700,
+                justify="left",
+            ).pack(anchor="w", pady=(4, 10))
+
+            preview_box = scrolledtext.ScrolledText(
+                preview_container,
+                wrap="none",
+                font=("Consolas", 10),
+                padx=10,
+                pady=10,
+            )
+            preview_box.pack(fill="both", expand=True)
+            preview_box.insert("1.0", preview_text_value)
+            preview_box.configure(state="disabled")
+
+            ttk.Button(
+                preview_container,
+                text="Close",
+                command=preview_window.destroy,
+                cursor="hand2",
+            ).pack(anchor="e", pady=(10, 0))
+
+            preview_window.bind(
+                "<Escape>",
+                lambda _event: preview_window.destroy(),
+            )
+            apply_interactive_cursors(preview_window)
+            preview_window.wait_window()
 
         def save_workshop_settings():
             published_id = published_id_var.get().strip()
@@ -1960,36 +2354,76 @@ def launch_gui():
             status_var.set("Workshop settings saved")
             dialog.destroy()
 
+        ttk.Label(
+            container,
+            textvariable=mode_status_var,
+            wraplength=700,
+            justify="left",
+        ).grid(
+            row=5,
+            column=0,
+            columnspan=3,
+            sticky="w",
+            pady=(10, 0),
+        )
+
         button_frame = ttk.Frame(container)
-        button_frame.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        button_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 0))
 
         ttk.Button(
             button_frame,
-            text="Open Workshop Folder",
+            text="Open Folder",
             command=open_local_workshop_folder,
             cursor="hand2",
         ).pack(side="left")
-        ttk.Button(
+
+        open_page_button = ttk.Button(
             button_frame,
-            text="Open Workshop Page",
+            text="Open Page",
             command=open_workshop_page,
             cursor="hand2",
+        )
+        open_page_button.pack(side="left", padx=(8, 0))
+
+        copy_url_button = ttk.Button(
+            button_frame,
+            text="Copy URL",
+            command=copy_workshop_url,
+            cursor="hand2",
+        )
+        copy_url_button.pack(side="left", padx=(8, 0))
+
+        ttk.Button(
+            button_frame,
+            text="Preview VDF",
+            command=preview_vdf,
+            cursor="hand2",
         ).pack(side="left", padx=(8, 0))
+
         ttk.Button(
             button_frame,
             text="Cancel",
             command=dialog.destroy,
             cursor="hand2",
         ).pack(side="right")
+
         ttk.Button(
             button_frame,
             text="Save Settings",
             command=save_workshop_settings,
+            style="Primary.TButton",
             cursor="hand2",
         ).pack(side="right", padx=(0, 8))
 
+        action_refs["open_page_button"] = open_page_button
+        action_refs["copy_url_button"] = copy_url_button
+
+        published_id_var.trace_add("write", update_workshop_action_state)
+        mode_var.trace_add("write", update_workshop_action_state)
+
         sync_mode()
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        apply_interactive_cursors(dialog)
         dialog.wait_window()
 
     workshop_manager_frame = ttk.LabelFrame(
@@ -2072,19 +2506,15 @@ def launch_gui():
 
     update_workshop_summary()
 
-    profile_bar = ttk.LabelFrame(outer, text="Profiles", padding=8)
-    profile_bar.pack(fill="x", pady=(8, 0))
-
-    profile_var = tk.StringVar()
-    profile_combo = ttk.Combobox(
-        profile_bar, textvariable=profile_var, state="readonly", width=38
+    output_frame = ttk.LabelFrame(
+        outer,
+        text="Build output",
+        padding=8,
     )
-    profile_combo.pack(side="left", padx=(0, 8))
+    output_frame.pack(fill="both", expand=True, pady=(10, 0))
 
-    ToolTip(profile_combo, hints["profiles"])
-
-    status_frame = ttk.Frame(outer)
-    status_frame.pack(fill="x", pady=(10, 4))
+    status_frame = ttk.Frame(output_frame)
+    status_frame.pack(fill="x", pady=(0, 6))
 
     status_left = ttk.Frame(status_frame)
     status_left.pack(side="left", fill="x", expand=True)
@@ -2114,7 +2544,11 @@ def launch_gui():
     progress.pack(side="right")
 
     output_box = scrolledtext.ScrolledText(
-        outer, height=12, wrap="word", font=("Consolas", 9), state="disabled"
+        output_frame,
+        height=12,
+        wrap="word",
+        font=("Consolas", 9),
+        state="disabled",
     )
     output_box.pack(fill="both", expand=True)
     locals_ref["output_box"] = output_box
@@ -2136,6 +2570,7 @@ def launch_gui():
         "estimated_seconds": None,
         "estimate_sample_count": 0,
         "mode": None,
+        "configuration": None,
     }
 
     def redact_command_for_log(cmd: list[str]) -> list[str]:
@@ -2289,6 +2724,7 @@ def launch_gui():
                 "estimated_seconds": estimate.get("estimated_seconds"),
                 "estimate_sample_count": estimate.get("sample_count", 0),
                 "mode": estimate.get("mode"),
+                "configuration": configuration,
             }
         )
 
@@ -2396,6 +2832,7 @@ def launch_gui():
                 "estimated_seconds": None,
                 "estimate_sample_count": 0,
                 "mode": None,
+                "configuration": None,
             }
         )
 
@@ -2476,20 +2913,34 @@ def launch_gui():
             (PROFILES_DIR / f"{name}.json").unlink(missing_ok=True)
             refresh_profiles()
 
-    ttk.Button(profile_bar, text="Save Current", command=save_profile).pack(
-        side="left", padx=4
-    )
-    ttk.Button(profile_bar, text="Load", command=load_profile).pack(side="left", padx=4)
-    ttk.Button(profile_bar, text="Delete", command=delete_profile).pack(
-        side="left", padx=4
-    )
+    ttk.Button(
+        profile_bar,
+        text="Save",
+        command=save_profile,
+        cursor="hand2",
+    ).grid(row=1, column=1, padx=(0, 4), sticky="ew")
+    ttk.Button(
+        profile_bar,
+        text="Load",
+        command=load_profile,
+        cursor="hand2",
+    ).grid(row=1, column=2, padx=4, sticky="ew")
+    ttk.Button(
+        profile_bar,
+        text="Delete",
+        command=delete_profile,
+        cursor="hand2",
+    ).grid(row=1, column=3, padx=4, sticky="ew")
     open_profiles_button = ttk.Button(
         profile_bar,
-        text="Open Local Profiles Folder",
+        text="Folder",
         command=lambda: os.startfile(PROFILES_DIR),
+        cursor="hand2",
     )
+    open_profiles_button.grid(row=1, column=4, padx=(4, 0), sticky="ew")
 
-    open_profiles_button.pack(side="left", padx=4)
+    for column in range(4):
+        profile_bar.columnconfigure(column, weight=1)
 
     ToolTip(open_profiles_button, hints["profiles"])
 
@@ -3616,6 +4067,67 @@ def launch_gui():
         except Exception as exc:
             messages.put(("error", str(exc)))
 
+    def recover_created_workshop_item_id() -> str:
+        """
+        Recover a new Published File ID after a successful SteamCMD upload.
+
+        SteamCMD may replace publishedfileid "0" inside my_item.vdf with the
+        newly created item ID.
+        """
+        configuration = build_state.get("configuration")
+
+        if not isinstance(configuration, dict):
+            return ""
+
+        build_flags = configuration.get("flags", {})
+
+        if not isinstance(build_flags, dict) or not build_flags.get("upload"):
+            return ""
+
+        original_id = str(configuration.get("publishedfileid", "")).strip()
+
+        if original_id not in {"", "0"}:
+            return ""
+
+        workshop_text = str(configuration.get("workshop", "")).strip()
+
+        if not workshop_text:
+            return ""
+
+        vdf_path = Path(workshop_text).expanduser() / "my_item.vdf"
+        recovered_id = read_published_file_id_from_vdf(vdf_path)
+
+        if not recovered_id:
+            return ""
+
+        updated_configuration = dict(configuration)
+        updated_configuration["publishedfileid"] = recovered_id
+
+        update_build_history_record(
+            str(build_state.get("id", "")),
+            {
+                "configuration": updated_configuration,
+                "recovered_publishedfileid": recovered_id,
+            },
+        )
+
+        should_save = messagebox.askyesno(
+            "Workshop item created",
+            (
+                "SteamCMD created a new Workshop item.\n\n"
+                f"Published File ID: {recovered_id}\n\n"
+                "Save this ID to the current Workshop settings?"
+            ),
+        )
+
+        if should_save:
+            fields["publishedfileid"].set(recovered_id)
+            update_workshop_summary()
+            save_settings()
+            status_var.set(f"Saved new Workshop item ID {recovered_id}")
+
+        return recovered_id
+
     def start_build():
         results = collect_preflight_results()
 
@@ -3793,6 +4305,7 @@ def launch_gui():
                             exit_code=value,
                         )
 
+                        recovered_workshop_id = recover_created_workshop_item_id()
                         rebuild_build_statistics()
 
                         status_var.set("Build completed successfully")
@@ -3802,10 +4315,17 @@ def launch_gui():
                             final_duration,
                         )
 
+                        workshop_result = (
+                            f"\nNew Workshop ID: {recovered_workshop_id}\n"
+                            if recovered_workshop_id
+                            else ""
+                        )
+
                         messagebox.showinfo(
                             "Meccha builder",
                             "Build completed successfully.\n\n"
                             f"Duration: {format_duration(final_duration)}\n"
+                            f"{workshop_result}"
                             f"Log saved to:\n{log_path}",
                         )
 
@@ -3872,6 +4392,31 @@ def launch_gui():
         except queue.Empty:
             pass
         root.after(100, poll_queue)
+
+    def apply_interactive_cursors(widget) -> None:
+        """Apply consistent mouse cursors to interactive widgets recursively."""
+        try:
+            widget_class = widget.winfo_class()
+
+            if widget_class in {
+                "TButton",
+                "TCheckbutton",
+                "TRadiobutton",
+                "TCombobox",
+            }:
+                widget.configure(cursor="hand2")
+            elif widget_class in {"TEntry", "Text"}:
+                widget.configure(cursor="xterm")
+        except (tk.TclError, TypeError):
+            pass
+
+        for child in widget.winfo_children():
+            apply_interactive_cursors(child)
+
+    def invoke_button_if_enabled(button) -> None:
+        """Invoke a button only when it is currently enabled."""
+        if str(button.cget("state")) != "disabled":
+            button.invoke()
 
     def open_path_in_windows(path: Path) -> None:
         """Open a file or folder using the Windows shell."""
@@ -4140,6 +4685,11 @@ def launch_gui():
             lambda _event: open_selected_log(),
         )
 
+        history_window.bind(
+            "<Escape>",
+            lambda _event: history_window.destroy(),
+        )
+        apply_interactive_cursors(history_window)
         refresh_history_table()
 
     def open_workshop():
@@ -4155,30 +4705,81 @@ def launch_gui():
         buttons,
         text="Validate",
         command=validate_only,
+        cursor="hand2",
     )
     validate_button.pack(side="left", padx=(0, 8))
-    build_button = ttk.Button(buttons, text="Build Mod", command=start_build)
+    build_button = ttk.Button(
+        buttons,
+        text="Build Mod",
+        command=start_build,
+        style="Primary.TButton",
+        cursor="hand2",
+    )
     build_button.pack(side="left")
     cancel_button = ttk.Button(
-        buttons, text="Cancel", command=cancel_build, state="disabled"
+        buttons,
+        text="Cancel",
+        command=cancel_build,
+        state="disabled",
+        style="Danger.TButton",
+        cursor="hand2",
     )
     cancel_button.pack(side="left", padx=8)
-    ttk.Button(buttons, text="Open Workshop Folder", command=open_workshop).pack(
-        side="left"
-    )
+    ttk.Button(
+        buttons,
+        text="Open Workshop Folder",
+        command=open_workshop,
+        cursor="hand2",
+    ).pack(side="left")
     ttk.Button(
         buttons,
         text="Build History",
         command=show_build_history,
+        cursor="hand2",
     ).pack(side="left", padx=(8, 0))
-    ttk.Button(buttons, text="Refresh Plugins", command=refresh_plugins).pack(
-        side="left", padx=8
-    )
+    ttk.Button(
+        buttons,
+        text="Refresh Plugins",
+        command=refresh_plugins,
+        cursor="hand2",
+    ).pack(side="left", padx=8)
     ttk.Button(
         buttons,
         text="Exit",
         command=close_application,
+        cursor="hand2",
     ).pack(side="right")
+
+    def handle_build_shortcut(_event=None):
+        invoke_button_if_enabled(build_button)
+        return "break"
+
+    def handle_validate_shortcut(_event=None):
+        invoke_button_if_enabled(validate_button)
+        return "break"
+
+    def handle_workshop_shortcut(_event=None):
+        open_workshop_manager()
+        return "break"
+
+    def handle_history_shortcut(_event=None):
+        show_build_history()
+        return "break"
+
+    root.bind("<Control-b>", handle_build_shortcut)
+    root.bind("<Control-B>", handle_build_shortcut)
+    root.bind("<Control-Shift-v>", handle_validate_shortcut)
+    root.bind("<Control-Shift-V>", handle_validate_shortcut)
+    root.bind("<Control-w>", handle_workshop_shortcut)
+    root.bind("<Control-W>", handle_workshop_shortcut)
+    root.bind("<Control-h>", handle_history_shortcut)
+    root.bind("<Control-H>", handle_history_shortcut)
+
+    ToolTip(build_button, "Start the build (Ctrl+B).")
+    ToolTip(validate_button, "Run preflight validation (Ctrl+Shift+V).")
+    ToolTip(cancel_button, "Stop the active build.")
+
+    apply_interactive_cursors(root)
 
     project_entry.bind("<FocusOut>", lambda _event: refresh_plugins(), add="+")
     refresh_profiles()
