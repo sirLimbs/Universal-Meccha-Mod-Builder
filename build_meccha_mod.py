@@ -216,6 +216,142 @@ def find_map_candidates(
 
     return sorted(unique_candidates, key=lambda path: str(path).lower())
 
+def find_running_unreal_processes() -> list[str]:
+    """
+    Return the names of running Unreal Editor processes on Windows.
+
+    Uses Windows tasklist so no additional dependency such as psutil is needed.
+    """
+    if os.name != "nt":
+        return []
+
+    known_processes = {
+        "unrealeditor.exe",
+        "ue4editor.exe",
+        "unrealeditor-cmd.exe",
+        "ue4editor-cmd.exe",
+    }
+
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    if completed.returncode != 0:
+        return []
+
+    running = set()
+
+    for line in completed.stdout.splitlines():
+        line = line.strip()
+
+        if not line:
+            continue
+
+        # CSV output begins with the quoted process name.
+        process_name = line.split(",", 1)[0].strip().strip('"')
+
+        if process_name.lower() in known_processes:
+            running.add(process_name)
+
+    return sorted(running, key=str.lower)
+
+def find_recent_unreal_recovery_files(
+    project: Path,
+    plugin_name: str = "",
+    maximum_results: int = 20,
+) -> list[Path]:
+    """
+    Locate recent Unreal autosave, backup, and temporary files.
+
+    Finding these files does not prove that assets are currently unsaved.
+    They are only used as a caution before starting a build.
+    """
+    project_root = project.parent
+
+    search_roots = [
+        project_root / "Saved" / "Autosaves",
+        project_root / "Saved" / "Backup",
+    ]
+
+    if plugin_name:
+        plugin_saved = project_root / "Plugins" / plugin_name / "Saved"
+
+        search_roots.extend([
+            plugin_saved / "Autosaves",
+            plugin_saved / "Backup",
+        ])
+
+    candidate_suffixes = {
+        ".autosave",
+        ".tmp",
+        ".temp",
+    }
+
+    candidates = []
+
+    for search_root in search_roots:
+        if not search_root.is_dir():
+            continue
+
+        try:
+            for path in search_root.rglob("*"):
+                if not path.is_file():
+                    continue
+
+                # Unreal autosave folders commonly contain .uasset and .umap
+                # recovery copies in addition to explicitly temporary files.
+                if (
+                    path.suffix.lower() in candidate_suffixes
+                    or path.suffix.lower() in {".uasset", ".umap"}
+                ):
+                    candidates.append(path)
+        except OSError:
+            continue
+
+    def modified_time(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    candidates.sort(key=modified_time, reverse=True)
+
+    return candidates[:maximum_results]
+
+def describe_file_age(path: Path) -> str:
+    """Return a short human-readable description of a file's age."""
+    try:
+        modified = datetime.fromtimestamp(path.stat().st_mtime)
+    except OSError:
+        return "unknown age"
+
+    elapsed = datetime.now() - modified
+    seconds = max(0, int(elapsed.total_seconds()))
+
+    if seconds < 60:
+        return "less than a minute ago"
+
+    minutes = seconds // 60
+
+    if minutes < 60:
+        return f"{minutes} minute(s) ago"
+
+    hours = minutes // 60
+
+    if hours < 24:
+        return f"{hours} hour(s) ago"
+
+    days = hours // 24
+    return f"{days} day(s) ago"
+
 def resource_path(*parts: str) -> Path:
     """
     Return a resource path that works both as a normal Python script
@@ -1877,6 +2013,74 @@ def launch_gui():
                 "Automatic SteamCMD upload is disabled",
                 "The Workshop payload will be prepared locally.",
             ))
+        # ---------------------------------------------------------
+        # Running Unreal Editor
+        # ---------------------------------------------------------
+        running_unreal_processes = find_running_unreal_processes()
+
+        if running_unreal_processes:
+            results.append(validation_result(
+                "warning",
+                "Unreal Editor is currently running",
+                (
+                    "Detected process(es):\n"
+                    + "\n".join(
+                        f"• {process_name}"
+                        for process_name in running_unreal_processes
+                    )
+                    + "\n\nSave all assets before building. Closing Unreal "
+                    "Editor is recommended before cooking or packaging."
+                ),
+            ))
+        else:
+            results.append(validation_result(
+                "pass",
+                "Unreal Editor is not running",
+            ))
+
+        # ---------------------------------------------------------
+        # Possible Unreal autosave or recovery files
+        # ---------------------------------------------------------
+        if project is not None:
+            recovery_files = find_recent_unreal_recovery_files(
+                project,
+                plugin_name,
+            )
+
+            if recovery_files:
+                shown_files = recovery_files[:8]
+
+                recovery_details = [
+                    (
+                        f"• {path.name} — {describe_file_age(path)}\n"
+                        f"  {path}"
+                    )
+                    for path in shown_files
+                ]
+
+                if len(recovery_files) > len(shown_files):
+                    recovery_details.append(
+                        f"...and {len(recovery_files) - len(shown_files)} more"
+                    )
+
+                results.append(validation_result(
+                    "warning",
+                    "Potential Unreal recovery or autosave files were found",
+                    (
+                        "This does not necessarily mean assets are currently "
+                        "unsaved. Save all work in Unreal before building.\n\n"
+                        + "\n".join(recovery_details)
+                    ),
+                ))
+            else:
+                results.append(validation_result(
+                    "pass",
+                    "No Unreal autosave or recovery files were found",
+                    (
+                        "No recovery files were found in the project's standard "
+                        "Saved\\Autosaves or Saved\\Backup folders."
+                    ),
+                ))
 
         return results
 
