@@ -738,6 +738,104 @@ APP_ICON_FILE = WINDOW_ICON_PATH
 APP_LOGO_FILE = HEADER_LOGO_PATH
 
 
+def read_image_dimensions(path: Path) -> tuple[int, int] | None:
+    """
+    Read PNG, GIF, or JPEG dimensions using only the Python standard library.
+
+    Returns None when the format is unsupported or the image cannot be parsed.
+    """
+    path = Path(path)
+
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(32)
+
+            # PNG: width and height are stored in the IHDR chunk.
+            if header.startswith(b"\x89PNG\r\n\x1a\n") and len(header) >= 24:
+                width = int.from_bytes(header[16:20], "big")
+                height = int.from_bytes(header[20:24], "big")
+                return width, height
+
+            # GIF87a / GIF89a: little-endian logical screen dimensions.
+            if header[:6] in {b"GIF87a", b"GIF89a"} and len(header) >= 10:
+                width = int.from_bytes(header[6:8], "little")
+                height = int.from_bytes(header[8:10], "little")
+                return width, height
+
+            # JPEG: scan markers until a Start Of Frame marker is found.
+            if header.startswith(b"\xff\xd8"):
+                stream.seek(2)
+
+                while True:
+                    marker_prefix = stream.read(1)
+
+                    if not marker_prefix:
+                        break
+
+                    if marker_prefix != b"\xff":
+                        continue
+
+                    marker = stream.read(1)
+
+                    while marker == b"\xff":
+                        marker = stream.read(1)
+
+                    if not marker:
+                        break
+
+                    marker_value = marker[0]
+
+                    # Standalone markers with no length field.
+                    if marker_value in {0x01, *range(0xD0, 0xD9)}:
+                        continue
+
+                    length_data = stream.read(2)
+
+                    if len(length_data) != 2:
+                        break
+
+                    segment_length = int.from_bytes(length_data, "big")
+
+                    if segment_length < 2:
+                        break
+
+                    if marker_value in {
+                        0xC0, 0xC1, 0xC2, 0xC3,
+                        0xC5, 0xC6, 0xC7,
+                        0xC9, 0xCA, 0xCB,
+                        0xCD, 0xCE, 0xCF,
+                    }:
+                        frame_data = stream.read(5)
+
+                        if len(frame_data) != 5:
+                            break
+
+                        height = int.from_bytes(frame_data[1:3], "big")
+                        width = int.from_bytes(frame_data[3:5], "big")
+                        return width, height
+
+                    stream.seek(segment_length - 2, 1)
+
+    except OSError:
+        return None
+
+    return None
+
+
+def format_file_size(size_bytes: int) -> str:
+    """Format a file size using binary units."""
+    size = float(max(0, size_bytes))
+
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+    return f"{size_bytes} B"
+
+
 def run(cmd, cwd=None):
     print("\n=== RUNNING ===")
     print(" ".join(f'"{c}"' if " " in str(c) else str(c) for c in cmd))
@@ -2147,7 +2245,7 @@ def launch_gui():
     def open_workshop_manager():
         dialog = tk.Toplevel(root)
         dialog.title("Workshop Manager")
-        dialog.geometry("780x720")
+        dialog.geometry("680x920")
         dialog.minsize(680, 580)
         dialog.transient(root)
         dialog.grab_set()
@@ -2447,6 +2545,297 @@ def launch_gui():
             justify="left",
         ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
+        readiness_frame = ttk.LabelFrame(
+            container,
+            text="Workshop readiness",
+            padding=10,
+        )
+        readiness_frame.grid(
+            row=5,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            pady=(10, 0),
+        )
+        readiness_frame.columnconfigure(1, weight=1)
+
+        preview_thumbnail_ref = {"image": None}
+
+        preview_thumbnail = ttk.Label(
+            readiness_frame,
+            text="No preview",
+            anchor="center",
+            width=18,
+        )
+        preview_thumbnail.grid(
+            row=0,
+            column=0,
+            rowspan=2,
+            sticky="nsw",
+            padx=(0, 12),
+        )
+
+        readiness_status_var = tk.StringVar(value="Not checked")
+        ttk.Label(
+            readiness_frame,
+            textvariable=readiness_status_var,
+            font=("Segoe UI", 10, "bold"),
+        ).grid(row=0, column=1, sticky="w")
+
+        readiness_details_var = tk.StringVar(
+            value="Choose Refresh Readiness to inspect the current settings."
+        )
+        ttk.Label(
+            readiness_frame,
+            textvariable=readiness_details_var,
+            justify="left",
+            wraplength=600,
+        ).grid(row=1, column=1, sticky="ew", pady=(4, 0))
+
+        readiness_results = {
+            "errors": [],
+            "warnings": [],
+            "passes": [],
+        }
+
+        def update_preview_thumbnail(preview_path: Path | None) -> None:
+            preview_thumbnail_ref["image"] = None
+            preview_thumbnail.configure(image="", text="No preview")
+
+            if preview_path is None or not preview_path.is_file():
+                return
+
+            if pillow_available:
+                try:
+                    image = Image.open(preview_path).convert("RGBA")
+                    image.thumbnail((128, 96), Image.Resampling.LANCZOS)
+                    photo = ImageTk.PhotoImage(image)
+                    preview_thumbnail.configure(image=photo, text="")
+                    preview_thumbnail_ref["image"] = photo
+                    return
+                except Exception:
+                    pass
+
+            dimensions = read_image_dimensions(preview_path)
+            label = preview_path.name
+
+            if dimensions:
+                label += f"\n{dimensions[0]} × {dimensions[1]}"
+
+            preview_thumbnail.configure(text=label)
+
+        def collect_workshop_readiness() -> dict:
+            results = {
+                "errors": [],
+                "warnings": [],
+                "passes": [],
+            }
+
+            workshop_text = workshop_var.get().strip()
+            preview_text = preview_var.get().strip()
+            title = title_var.get().strip()
+            description = description_text.get("1.0", "end-1c").strip()
+            changenote = changenote_var.get().strip()
+            published_id = published_id_var.get().strip()
+
+            # Workshop folder
+            if not workshop_text:
+                results["errors"].append("Workshop folder is not selected.")
+            else:
+                workshop_path = Path(workshop_text).expanduser()
+
+                if workshop_path.exists() and not workshop_path.is_dir():
+                    results["errors"].append(
+                        "Workshop path exists but is not a folder."
+                    )
+                elif workshop_path.is_dir():
+                    results["passes"].append("Workshop folder is accessible.")
+
+                    try:
+                        existing_payload = [
+                            path
+                            for path in workshop_path.iterdir()
+                            if path.is_file()
+                            and path.suffix.lower()
+                            in {".pak", ".ucas", ".utoc", ".bin", ".vdf"}
+                        ]
+                    except OSError:
+                        existing_payload = []
+
+                    if existing_payload:
+                        results["passes"].append(
+                            f"{len(existing_payload)} existing payload file(s) found."
+                        )
+                    else:
+                        results["warnings"].append(
+                            "No packaged payload files are currently present."
+                        )
+                else:
+                    parent = workshop_path.parent
+
+                    if parent.is_dir():
+                        results["warnings"].append(
+                            "Workshop folder does not exist yet but can be created."
+                        )
+                    else:
+                        results["errors"].append(
+                            "Workshop folder parent does not exist."
+                        )
+
+            # Preview image
+            preview_path = Path(preview_text).expanduser() if preview_text else None
+            update_preview_thumbnail(preview_path)
+
+            if preview_path is None:
+                results["errors"].append("Preview image is not selected.")
+            elif not preview_path.is_file():
+                results["errors"].append("Preview image was not found.")
+            else:
+                suffix = preview_path.suffix.lower()
+
+                if suffix not in {".png", ".jpg", ".jpeg", ".gif"}:
+                    results["errors"].append(
+                        f"Unsupported preview format: {suffix or 'none'}."
+                    )
+                else:
+                    results["passes"].append(
+                        f"Preview format is {suffix.lstrip('.').upper()}."
+                    )
+
+                try:
+                    preview_size = preview_path.stat().st_size
+                except OSError:
+                    preview_size = 0
+
+                if preview_size > 8 * 1024 * 1024:
+                    results["warnings"].append(
+                        f"Preview is large ({format_file_size(preview_size)})."
+                    )
+                elif preview_size:
+                    results["passes"].append(
+                        f"Preview size is {format_file_size(preview_size)}."
+                    )
+
+                dimensions = read_image_dimensions(preview_path)
+
+                if dimensions:
+                    width, height = dimensions
+                    results["passes"].append(
+                        f"Preview dimensions: {width} × {height}."
+                    )
+
+                    if width < 256 or height < 256:
+                        results["warnings"].append(
+                            "Preview is smaller than 256 pixels on one side."
+                        )
+
+                    aspect_ratio = width / height if height else 0
+
+                    if aspect_ratio and not 0.75 <= aspect_ratio <= 1.8:
+                        results["warnings"].append(
+                            "Preview has an unusually narrow or wide aspect ratio."
+                        )
+                else:
+                    results["warnings"].append(
+                        "Preview dimensions could not be read."
+                    )
+
+            # Metadata
+            if not title:
+                results["errors"].append("Workshop title is empty.")
+            elif len(title) < 3:
+                results["warnings"].append("Workshop title is very short.")
+            else:
+                results["passes"].append(
+                    f"Workshop title contains {len(title)} characters."
+                )
+
+            if not description:
+                results["errors"].append("Workshop description is empty.")
+            elif len(description) < 20:
+                results["warnings"].append(
+                    "Workshop description is shorter than 20 characters."
+                )
+            else:
+                results["passes"].append(
+                    f"Description contains {len(description)} characters."
+                )
+
+            if not changenote:
+                results["warnings"].append("Change note is empty.")
+            else:
+                results["passes"].append("Change note is present.")
+
+            # IDs and upload configuration
+            if mode_var.get() == "create":
+                results["passes"].append(
+                    "Create mode will use Published File ID 0."
+                )
+            elif not published_id.isdigit() or published_id == "0":
+                results["errors"].append(
+                    "Update mode requires a non-zero numeric Published File ID."
+                )
+            else:
+                results["passes"].append(
+                    f"Published File ID {published_id} is valid."
+                )
+
+            if upload_var.get():
+                steamcmd_path = Path(steamcmd_var.get().strip()).expanduser()
+
+                if not steamcmd_var.get().strip():
+                    results["errors"].append(
+                        "Automatic upload is enabled but SteamCMD is not selected."
+                    )
+                elif not steamcmd_path.is_file():
+                    results["errors"].append("SteamCMD executable was not found.")
+                else:
+                    results["passes"].append("SteamCMD executable was found.")
+            else:
+                results["passes"].append(
+                    "Automatic upload is disabled; local packaging only."
+                )
+
+            return results
+
+        def refresh_workshop_readiness(*_args) -> dict:
+            results = collect_workshop_readiness()
+            readiness_results.clear()
+            readiness_results.update(results)
+
+            error_count = len(results["errors"])
+            warning_count = len(results["warnings"])
+            pass_count = len(results["passes"])
+
+            if error_count:
+                readiness_status_var.set(
+                    f"Not ready — {error_count} error(s), "
+                    f"{warning_count} warning(s)"
+                )
+            elif warning_count:
+                readiness_status_var.set(
+                    f"Ready with {warning_count} warning(s)"
+                )
+            else:
+                readiness_status_var.set("Ready for Workshop packaging")
+
+            detail_lines = []
+
+            for message in results["errors"]:
+                detail_lines.append(f"✖ {message}")
+
+            for message in results["warnings"]:
+                detail_lines.append(f"⚠ {message}")
+
+            for message in results["passes"][:4]:
+                detail_lines.append(f"✓ {message}")
+
+            if pass_count > 4:
+                detail_lines.append(f"✓ {pass_count - 4} more check(s) passed.")
+
+            readiness_details_var.set("\n".join(detail_lines))
+            return results
+
         def open_local_workshop_folder():
             path = Path(workshop_var.get().strip()).expanduser()
             if path.is_dir():
@@ -2609,6 +2998,17 @@ def launch_gui():
             preview_window.wait_window()
 
         def save_workshop_settings():
+            results = refresh_workshop_readiness()
+
+            if results["errors"]:
+                messagebox.showerror(
+                    "Workshop Manager",
+                    "Workshop settings contain blocking errors.\n\n"
+                    + "\n".join(f"• {message}" for message in results["errors"]),
+                    parent=dialog,
+                )
+                return
+
             published_id = published_id_var.get().strip()
             if mode_var.get() == "create":
                 published_id = "0"
@@ -2660,7 +3060,7 @@ def launch_gui():
             wraplength=700,
             justify="left",
         ).grid(
-            row=5,
+            row=6,
             column=0,
             columnspan=3,
             sticky="w",
@@ -2668,14 +3068,21 @@ def launch_gui():
         )
 
         button_frame = ttk.Frame(container)
-        button_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        button_frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+
+        ttk.Button(
+            button_frame,
+            text="Refresh Readiness",
+            command=refresh_workshop_readiness,
+            cursor="hand2",
+        ).pack(side="left")
 
         ttk.Button(
             button_frame,
             text="Open Folder",
             command=open_local_workshop_folder,
             cursor="hand2",
-        ).pack(side="left")
+        ).pack(side="left", padx=(8, 0))
 
         open_page_button = ttk.Button(
             button_frame,
@@ -2721,7 +3128,28 @@ def launch_gui():
         published_id_var.trace_add("write", update_workshop_action_state)
         mode_var.trace_add("write", update_workshop_action_state)
 
+        for readiness_variable in (
+            workshop_var,
+            preview_var,
+            published_id_var,
+            title_var,
+            changenote_var,
+            steamcmd_var,
+            upload_var,
+            mode_var,
+        ):
+            readiness_variable.trace_add(
+                "write",
+                lambda *_args: dialog.after_idle(refresh_workshop_readiness),
+            )
+
+        description_text.bind(
+            "<KeyRelease>",
+            lambda _event: dialog.after_idle(refresh_workshop_readiness),
+        )
+
         sync_mode()
+        refresh_workshop_readiness()
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         apply_interactive_cursors(dialog)
         dialog.wait_window()
