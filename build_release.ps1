@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$PythonCommand = "py",
-    [string]$Version = "1.2.0",
+    [string]$Version = "1.2.1",
     [switch]$SkipDependencyInstall
 )
 

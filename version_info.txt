@@ -18,12 +18,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Limbs'),
             StringStruct('FileDescription', 'Universal Meccha Mod Builder'),
-            StringStruct('FileVersion', '1.2.0'),
+            StringStruct('FileVersion', '1.2.1'),
             StringStruct('InternalName', 'MecchaModBuilder'),
             StringStruct('LegalCopyright', 'Copyright (c) 2026 Limbs'),
             StringStruct('OriginalFilename', 'Meccha Mod Builder.exe'),
             StringStruct('ProductName', 'Universal Meccha Mod Builder'),
-            StringStruct('ProductVersion', '1.2.0')
+            StringStruct('ProductVersion', '1.2.1')
           ]
         )
       ]
