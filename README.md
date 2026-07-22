@@ -3,7 +3,6 @@
 A Windows desktop application and command-line utility for building, validating, packaging, staging, and optionally uploading custom **Meccha Chameleon** maps created with the Unreal Engine mod kit.
 
 <p align="center">
-  <a href="https://i.imgur.com/sTAxRmW.png">
     <img src="https://i.imgur.com/sTAxRmW.png" alt="Meccha Mod Builder preview" width="900">
   </a>
 </p>
