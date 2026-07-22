@@ -1,0 +1,118 @@
+{
+  "name": "Meccha Developer Tools",
+  "version": "1.0",
+  "tools": [
+    {
+      "name": "Create Meccha UGC Plugin",
+      "type": "python",
+      "category": "Project Setup",
+      "path": "python/01_Create_Meccha_UGC_Plugin.py",
+      "description": "Creates a content-only UGC plugin and recommended content folders."
+    },
+    {
+      "name": "Generate Configurable Arena Blockout",
+      "type": "python",
+      "category": "Level Generation",
+      "path": "python/02_Generate_Configurable_Arena_Blockout.py",
+      "description": "Builds a configurable arena shell, panels, references, and lighting."
+    },
+    {
+      "name": "Batch Import Images to Numbered Actors",
+      "type": "python",
+      "category": "Materials",
+      "path": "python/03_Batch_Import_Images_To_Numbered_Actors.py",
+      "description": "Imports numbered images and assigns generated material instances."
+    },
+    {
+      "name": "Audit Current Level",
+      "type": "python",
+      "category": "Validation",
+      "path": "python/04_Audit_Current_Level_For_Meccha_UGC.py",
+      "description": "Reports common actor, spawn, mesh, label, and transform problems."
+    },
+    {
+      "name": "Organize Selected Actors",
+      "type": "python",
+      "category": "Organization",
+      "path": "python/05_Organize_Selected_Actors_Into_Folders.py",
+      "description": "Moves selected actors into organized World Outliner folders."
+    },
+    {
+      "name": "Create Spawn and Bounds Markers",
+      "type": "python",
+      "category": "Level Setup",
+      "path": "python/06_Create_Spawn_And_Bounds_Markers.py",
+      "description": "Creates TargetPoint references for spawn and arena boundaries."
+    },
+    {
+      "name": "Batch Rename Selected Actors",
+      "type": "python",
+      "category": "Organization",
+      "path": "python/07_Batch_Rename_Selected_Actors.py",
+      "description": "Sequentially renames selected actors with a chosen prefix."
+    },
+    {
+      "name": "Randomize Selected Props",
+      "type": "python",
+      "category": "Set Dressing",
+      "path": "python/08_Randomize_Selected_Props.py",
+      "description": "Adds deterministic transform variation to selected props."
+    },
+    {
+      "name": "Replace Selected Actors",
+      "type": "python",
+      "category": "Set Dressing",
+      "path": "python/09_Replace_Selected_Actors_With_Asset.py",
+      "description": "Creates configured Blueprint replacements at selected transforms."
+    },
+    {
+      "name": "Export Level Actor Report",
+      "type": "python",
+      "category": "Reporting",
+      "path": "python/10_Export_Current_Level_Actor_Report.py",
+      "description": "Exports current-level actor details to a CSV file."
+    },
+    {
+      "name": "Set Selected Collision Profile",
+      "type": "python",
+      "category": "Collision",
+      "path": "python/11_Set_Selected_Actors_Collision_Profile.py",
+      "description": "Applies a collision profile to selected actors."
+    },
+    {
+      "name": "Distribute Selected Actors in Grid",
+      "type": "python",
+      "category": "Layout",
+      "path": "python/12_Distribute_Selected_Actors_In_Grid.py",
+      "description": "Arranges selected actors into a configurable grid."
+    },
+    {
+      "name": "Export Selected Blueprint Data",
+      "category": "Blueprint Analysis",
+      "path": "python/01_Export_Selected_Blueprint_Data.py"
+    },
+    {
+      "name": "Meccha Material Factory",
+      "category": "Materials",
+      "path": "python/02_Meccha_Material_Factory.py"
+    }
+  ],
+  "guide": "guides/BLUEPRINT_AND_MATERIAL_GUIDE.md",
+
+  "name": "Meccha UE5.6 Blueprint Starter Pack",
+  "version": "1.0",
+  "scripts": [
+    "01_Create_BPI_MecchaActivatable.py",
+    "02_Create_BP_MecchaTriggerBase.py",
+    "03_Create_BP_TeleporterTarget.py",
+    "04_Create_BP_MecchaTeleporter.py",
+    "05_Create_BP_MovingPlatform.py",
+    "06_Create_BP_DelayedCollisionBarrier.py",
+    "07_Create_BP_PressurePlate.py",
+    "08_Create_BP_SimpleDoor.py",
+    "09_Create_BP_FallingFloor.py",
+    "10_Create_BP_JumpPad.py"
+  ],
+  "helper": "_meccha_blueprint_factory_common.py",
+  "guide": "guides/BLUEPRINT_STARTER_PACK_GUIDE.md"
+}

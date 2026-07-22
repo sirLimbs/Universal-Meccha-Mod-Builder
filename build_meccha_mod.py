@@ -3,6 +3,8 @@
 # =============================================================================
 
 import argparse
+import html
+import io
 import json
 import os
 import platform
@@ -12,11 +14,13 @@ import shutil
 import subprocess
 import sys
 import threading
+import tokenize
 import urllib.error
 import urllib.request
 import webbrowser
 import zipfile
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 
 # =============================================================================
@@ -2028,6 +2032,65 @@ def launch_gui():
             selectbackground=[("readonly", c["select"])],
         )
 
+        # Developer Resources and other tabular editor windows.
+        style.configure(
+            "TNotebook",
+            background=c["bg"],
+            borderwidth=0,
+        )
+        style.configure(
+            "TNotebook.Tab",
+            background=c["panel"],
+            foreground=c["fg"],
+            padding=(12, 6),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[
+                ("selected", c["accent"]),
+                ("active", c["select"]),
+            ],
+            foreground=[
+                ("selected", "#ffffff"),
+                ("active", c["fg"]),
+            ],
+        )
+        style.configure(
+            "Treeview",
+            background=c["field"],
+            fieldbackground=c["field"],
+            foreground=c["fg"],
+            rowheight=24,
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", c["select"])],
+            foreground=[("selected", "#ffffff")],
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=c["panel"],
+            foreground=c["fg"],
+            relief="flat",
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("active", c["select"])],
+            foreground=[("active", c["fg"])],
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            background=c["panel"],
+            troughcolor=c["bg"],
+            arrowcolor=c["fg"],
+        )
+        style.configure(
+            "Horizontal.TScrollbar",
+            background=c["panel"],
+            troughcolor=c["bg"],
+            arrowcolor=c["fg"],
+        )
+
         if "output_box" in locals_ref:
             console = locals_ref["output_box"]
             console.configure(
@@ -2124,6 +2187,19 @@ def launch_gui():
     canvas.bind("<Configure>", match_canvas_width)
 
     def mousewheel(event):
+        """
+        Scroll the main page only when the wheel event belongs to the main window.
+
+        Child windows such as Developer Resources contain their own scrollable
+        Treeviews and text previews. Ignoring their events here prevents one wheel
+        movement from scrolling both the child window and the main page.
+        """
+        try:
+            if event.widget.winfo_toplevel() is not root:
+                return
+        except tk.TclError:
+            return
+
         if event.delta:
             canvas.yview_scroll(int(-event.delta / 120), "units")
 
@@ -6210,15 +6286,17 @@ def launch_gui():
 
         dialog = tk.Toplevel(root)
         dialog.title("Developer Resources")
-        dialog.geometry("860x600")
-        dialog.minsize(700, 480)
+        dialog.geometry("1100x760")
+        dialog.minsize(760, 520)
+        dialog.resizable(True, True)
         dialog.transient(root)
         apply_window_icon(dialog, remember_key="developer_resources")
 
         container = ttk.Frame(dialog, padding=14)
         container.pack(fill="both", expand=True)
         container.columnconfigure(0, weight=1)
-        container.rowconfigure(2, weight=1)
+        container.rowconfigure(2, weight=3)
+        container.rowconfigure(3, weight=2)
 
         ttk.Label(
             container,
@@ -6229,18 +6307,22 @@ def launch_gui():
         ttk.Label(
             container,
             text=(
-                "Browse packaged helper scripts and Blueprint assets, or add your own "
-                "files to the AppData developer_tools folder."
+                "Browse packaged helper scripts, guides, and Unreal assets. "
+                "Text resources can be previewed in full and copied to the clipboard."
+                +"\n\nAlternitivley you can run these from UE:"
+                +"\n1. Enable 'Python Editor Script Plugin' & 'Editor Scripting Utilities' Save and restart UE."
+                +"\n2. Tools → Execute Python Script."
             ),
-            wraplength=800,
+            wraplength=1000,
             justify="left",
         ).grid(row=1, column=0, sticky="w", pady=(4, 12))
 
         notebook = ttk.Notebook(container)
         notebook.grid(row=2, column=0, sticky="nsew")
 
-        preview_var = tk.StringVar(value="Select a resource to view its details.")
         selected_path = {"value": None}
+        selected_text = {"value": ""}
+        selected_copy_text = {"value": ""}
 
         def collect_resources():
             roots = [
@@ -6274,13 +6356,256 @@ def launch_gui():
 
             return groups
 
+        current_colors = COLORS.get(fields["theme"].get(), COLORS["dark"])
+
+        details_frame = ttk.LabelFrame(
+            container,
+            text="Selected resource preview",
+            padding=8,
+        )
+        details_frame.grid(row=3, column=0, sticky="nsew", pady=(12, 0))
+        details_frame.columnconfigure(0, weight=1)
+        details_frame.rowconfigure(0, weight=1)
+
+        preview_box = scrolledtext.ScrolledText(
+            details_frame,
+            wrap="none",
+            undo=False,
+            font=("Consolas", 9),
+            background=current_colors["console_bg"],
+            foreground=current_colors["console_fg"],
+            insertbackground=current_colors["fg"],
+            selectbackground=current_colors["select"],
+            borderwidth=0,
+            padx=8,
+            pady=8,
+        )
+        preview_box.grid(row=0, column=0, sticky="nsew")
+        preview_box.insert("1.0", "Select a resource to view its details.")
+        preview_box.configure(state="disabled")
+
+        preview_horizontal = ttk.Scrollbar(
+            details_frame,
+            orient="horizontal",
+            command=preview_box.xview,
+        )
+        preview_horizontal.grid(row=1, column=0, sticky="ew")
+        preview_box.configure(xscrollcommand=preview_horizontal.set)
+
+        def configure_preview_tags():
+            """Configure lightweight Markdown and Python syntax highlighting."""
+            colors = COLORS.get(fields["theme"].get(), COLORS["dark"])
+
+            preview_box.tag_configure(
+                "md_h1",
+                font=("Segoe UI", 18, "bold"),
+                foreground=colors["accent"],
+                spacing1=8,
+                spacing3=6,
+            )
+            preview_box.tag_configure(
+                "md_h2",
+                font=("Segoe UI", 15, "bold"),
+                foreground=colors["accent"],
+                spacing1=7,
+                spacing3=5,
+            )
+            preview_box.tag_configure(
+                "md_h3",
+                font=("Segoe UI", 12, "bold"),
+                foreground=colors["fg"],
+                spacing1=6,
+                spacing3=4,
+            )
+            preview_box.tag_configure(
+                "md_bold",
+                font=("Segoe UI", 9, "bold"),
+            )
+            preview_box.tag_configure(
+                "md_italic",
+                font=("Segoe UI", 9, "italic"),
+            )
+            preview_box.tag_configure(
+                "md_code",
+                font=("Consolas", 9),
+                background=colors["panel"],
+                foreground=colors["console_fg"],
+            )
+            preview_box.tag_configure(
+                "md_quote",
+                foreground=colors["muted"],
+                lmargin1=18,
+                lmargin2=18,
+            )
+            preview_box.tag_configure(
+                "md_list",
+                lmargin1=18,
+                lmargin2=34,
+            )
+            preview_box.tag_configure(
+                "py_keyword",
+                foreground="#c586c0" if fields["theme"].get() == "dark" else "#7a1fa2",
+            )
+            preview_box.tag_configure(
+                "py_string",
+                foreground="#ce9178" if fields["theme"].get() == "dark" else "#a31515",
+            )
+            preview_box.tag_configure(
+                "py_comment",
+                foreground="#6a9955" if fields["theme"].get() == "dark" else "#008000",
+            )
+            preview_box.tag_configure(
+                "py_number",
+                foreground="#b5cea8" if fields["theme"].get() == "dark" else "#098658",
+            )
+            preview_box.tag_configure(
+                "py_builtin",
+                foreground="#4ec9b0" if fields["theme"].get() == "dark" else "#267f99",
+            )
+            preview_box.tag_configure(
+                "py_operator",
+                foreground=colors["console_fg"],
+            )
+
+        def clear_preview():
+            preview_box.configure(state="normal")
+            preview_box.delete("1.0", "end")
+            for tag_name in preview_box.tag_names():
+                if tag_name not in {"sel"}:
+                    preview_box.tag_remove(tag_name, "1.0", "end")
+
+        def finish_preview():
+            preview_box.configure(state="disabled")
+            preview_box.yview_moveto(0)
+            preview_box.xview_moveto(0)
+
+        def render_plain_text(content):
+            clear_preview()
+            preview_box.insert("1.0", content)
+            finish_preview()
+
+        def render_markdown(content):
+            """Render common Markdown structure without external dependencies."""
+            clear_preview()
+            in_code_block = False
+
+            for raw_line in content.splitlines(keepends=True):
+                line = raw_line.rstrip("\r\n")
+                newline = raw_line[len(line):] or "\n"
+
+                if line.strip().startswith("```"):
+                    in_code_block = not in_code_block
+                    preview_box.insert("end", line + newline, "md_code")
+                    continue
+
+                if in_code_block:
+                    preview_box.insert("end", line + newline, "md_code")
+                    continue
+
+                stripped = line.lstrip()
+                indent = len(line) - len(stripped)
+
+                if stripped.startswith("# "):
+                    preview_box.insert("end", stripped[2:] + newline, "md_h1")
+                elif stripped.startswith("## "):
+                    preview_box.insert("end", stripped[3:] + newline, "md_h2")
+                elif stripped.startswith("### "):
+                    preview_box.insert("end", stripped[4:] + newline, "md_h3")
+                elif stripped.startswith("> "):
+                    preview_box.insert("end", stripped[2:] + newline, "md_quote")
+                elif re.match(r"^([-*+]|\d+\.)\s+", stripped):
+                    preview_box.insert("end", (" " * indent) + stripped + newline, "md_list")
+                else:
+                    start = preview_box.index("end-1c")
+                    preview_box.insert("end", line + newline)
+                    end = preview_box.index("end-1c")
+
+                    # Inline code.
+                    for match in re.finditer(r"`([^`]+)`", line):
+                        preview_box.tag_add(
+                            "md_code",
+                            f"{start}+{match.start()}c",
+                            f"{start}+{match.end()}c",
+                        )
+
+                    # Bold and italic. Lightweight handling, not a full parser.
+                    for match in re.finditer(r"\*\*([^*]+)\*\*", line):
+                        preview_box.tag_add(
+                            "md_bold",
+                            f"{start}+{match.start()}c",
+                            f"{start}+{match.end()}c",
+                        )
+                    for match in re.finditer(r"(?<!\*)\*([^*]+)\*(?!\*)", line):
+                        preview_box.tag_add(
+                            "md_italic",
+                            f"{start}+{match.start()}c",
+                            f"{start}+{match.end()}c",
+                        )
+
+            finish_preview()
+
+        def render_python(content):
+            """Apply Python syntax highlighting using the standard tokenize module."""
+            clear_preview()
+            preview_box.insert("1.0", content)
+
+            import keyword
+            builtin_names = set(dir(__builtins__))
+
+            try:
+                tokens = tokenize.generate_tokens(io.StringIO(content).readline)
+                for token_info in tokens:
+                    token_type = token_info.type
+                    token_text = token_info.string
+                    start_row, start_col = token_info.start
+                    end_row, end_col = token_info.end
+
+                    tag_name = None
+                    if token_type == tokenize.COMMENT:
+                        tag_name = "py_comment"
+                    elif token_type == tokenize.STRING:
+                        tag_name = "py_string"
+                    elif token_type == tokenize.NUMBER:
+                        tag_name = "py_number"
+                    elif token_type == tokenize.OP:
+                        tag_name = "py_operator"
+                    elif token_type == tokenize.NAME:
+                        if keyword.iskeyword(token_text):
+                            tag_name = "py_keyword"
+                        elif token_text in builtin_names:
+                            tag_name = "py_builtin"
+
+                    if tag_name:
+                        preview_box.tag_add(
+                            tag_name,
+                            f"{start_row}.{start_col}",
+                            f"{end_row}.{end_col}",
+                        )
+            except (tokenize.TokenError, IndentationError, SyntaxError):
+                pass
+
+            finish_preview()
+
+        def set_preview(content, suffix=""):
+            selected_text["value"] = content
+            configure_preview_tags()
+
+            normalized_suffix = suffix.lower()
+            if normalized_suffix == ".md":
+                render_markdown(content)
+            elif normalized_suffix in {".py", ".pyw"}:
+                render_python(content)
+            else:
+                render_plain_text(content)
+
         tree_refs = {}
 
         def update_selection(tree):
             selection = tree.selection()
             if not selection:
                 selected_path["value"] = None
-                preview_var.set("Select a resource to view its details.")
+                selected_copy_text["value"] = ""
+                set_preview("Select a resource to view its details.")
                 return
 
             values = tree.item(selection[0], "values")
@@ -6301,16 +6626,41 @@ def launch_gui():
             except OSError:
                 pass
 
-            if path.suffix.lower() in {".py", ".pyw", ".txt", ".md", ".json"}:
+            suffix = path.suffix.lower()
+
+            if suffix in {".py", ".pyw", ".txt", ".md", ".json", ".csv", ".log"}:
                 try:
-                    snippet = path.read_text(encoding="utf-8-sig")[:1600].strip()
-                except (OSError, UnicodeError):
-                    snippet = ""
+                    file_text = path.read_text(encoding="utf-8-sig")
+                except (OSError, UnicodeError) as exc:
+                    file_text = f"Could not read this text resource:\n{exc}"
 
-                if snippet:
-                    detail_lines.extend(["", "Preview", "-------", snippet])
+                selected_copy_text["value"] = file_text
+                detail_lines.extend(
+                    [
+                        "",
+                        "Contents",
+                        "--------",
+                        file_text,
+                    ]
+                )
+            elif suffix in {".uasset", ".umap"}:
+                selected_copy_text["value"] = ""
+                detail_lines.extend(
+                    [
+                        "",
+                        "Binary Unreal asset",
+                        "-------------------",
+                        (
+                            "This asset cannot be shown as text. Use Open Resource "
+                            "or Open Resource Folder to inspect it in Unreal Editor."
+                        ),
+                    ]
+                )
 
-            preview_var.set("\n".join(detail_lines))
+            if suffix not in {".py", ".pyw", ".txt", ".md", ".json", ".csv", ".log", ".uasset", ".umap"}:
+                selected_copy_text["value"] = str(path)
+
+            set_preview("\n".join(detail_lines), suffix)
 
         for tab_name in ("Python Scripts", "Blueprints", "Other"):
             tab = ttk.Frame(notebook, padding=8)
@@ -6327,25 +6677,39 @@ def launch_gui():
             tree.heading("#0", text="Name")
             tree.heading("source", text="Source")
             tree.heading("path", text="Path")
-            tree.column("#0", width=240, stretch=True)
-            tree.column("source", width=90, stretch=False)
-            tree.column("path", width=420, stretch=True)
+            tree.column("#0", width=300, minwidth=180, stretch=True)
+            tree.column("source", width=90, minwidth=80, stretch=False)
+            tree.column("path", width=620, minwidth=260, stretch=True)
 
-            scrollbar = ttk.Scrollbar(tab, orient="vertical", command=tree.yview)
-            tree.configure(yscrollcommand=scrollbar.set)
+            vertical_scrollbar = ttk.Scrollbar(
+                tab,
+                orient="vertical",
+                command=tree.yview,
+            )
+            horizontal_scrollbar = ttk.Scrollbar(
+                tab,
+                orient="horizontal",
+                command=tree.xview,
+            )
+            tree.configure(
+                yscrollcommand=vertical_scrollbar.set,
+                xscrollcommand=horizontal_scrollbar.set,
+            )
             tree.grid(row=0, column=0, sticky="nsew")
-            scrollbar.grid(row=0, column=1, sticky="ns")
-            tree.bind("<<TreeviewSelect>>", lambda _event, current=tree: update_selection(current))
+            vertical_scrollbar.grid(row=0, column=1, sticky="ns")
+            horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
+            tree.bind(
+                "<<TreeviewSelect>>",
+                lambda _event, current=tree: update_selection(current),
+            )
+            tree.bind(
+                "<Double-1>",
+                lambda _event, current=tree: (
+                    update_selection(current),
+                    open_selected(),
+                ),
+            )
             tree_refs[tab_name] = tree
-
-        details_frame = ttk.LabelFrame(container, text="Selected resource", padding=10)
-        details_frame.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        ttk.Label(
-            details_frame,
-            textvariable=preview_var,
-            justify="left",
-            wraplength=800,
-        ).pack(fill="x")
 
         def refresh_resources():
             groups = collect_resources()
@@ -6360,11 +6724,13 @@ def launch_gui():
                         values=(source_name, path_text),
                     )
 
-            preview_var.set(
-                "Select a resource to view its details. "
-                "Add custom resources under the AppData developer_tools folder."
+            set_preview(
+                "Select a resource to view its details.\n\n"
+                f"Packaged resources:\n{DEVELOPER_TOOLS_DIR}\n\n"
+                f"Optional user resources:\n{USER_DEVELOPER_TOOLS_DIR}"
             )
             selected_path["value"] = None
+            selected_copy_text["value"] = ""
             status_var.set("Developer resources refreshed")
 
         def require_selected_path():
@@ -6397,6 +6763,20 @@ def launch_gui():
             root.update_idletasks()
             status_var.set("Resource path copied")
 
+        def copy_preview():
+            content = selected_copy_text["value"]
+            if not content:
+                messagebox.showwarning(
+                    "Developer Resources",
+                    "Select a readable text resource first.",
+                    parent=dialog,
+                )
+                return
+            root.clipboard_clear()
+            root.clipboard_append(content)
+            root.update_idletasks()
+            status_var.set("Resource contents copied")
+
         button_row = ttk.Frame(container)
         button_row.grid(row=4, column=0, sticky="ew", pady=(12, 0))
 
@@ -6409,8 +6789,8 @@ def launch_gui():
         make_icon_button(
             button_row,
             "folder",
-            "Open the user developer_tools folder.",
-            command=lambda: open_path_in_windows(USER_DEVELOPER_TOOLS_DIR),
+            "Open the packaged developer_tools folder.",
+            command=lambda: open_path_in_windows(DEVELOPER_TOOLS_DIR),
         ).pack(side="left", padx=(8, 0))
         make_icon_button(
             button_row,
@@ -6427,6 +6807,12 @@ def launch_gui():
         make_icon_button(
             button_row,
             "copy",
+            "Copy only the selected file contents, without resource metadata.",
+            command=copy_preview,
+        ).pack(side="left", padx=(8, 0))
+        make_icon_button(
+            button_row,
+            "link",
             "Copy the selected resource path.",
             command=copy_selected_path,
         ).pack(side="left", padx=(8, 0))
@@ -6439,6 +6825,8 @@ def launch_gui():
 
         refresh_resources()
         apply_interactive_cursors(dialog)
+        dialog.lift()
+        dialog.focus_set()
 
     def open_path_in_windows(path: Path) -> None:
         """Open a file or folder using the Windows shell."""
@@ -6625,6 +7013,103 @@ def launch_gui():
         )
         save_json_file(UPDATE_SETTINGS_FILE, update_settings)
 
+    class _ReadableHTMLParser(HTMLParser):
+        """Convert small GitHub/README HTML fragments into readable plain text."""
+
+        BLOCK_TAGS = {
+            "address", "article", "aside", "blockquote", "br", "div", "figcaption",
+            "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header",
+            "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table",
+            "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
+        }
+
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.parts = []
+            self.link_stack = []
+
+        def _newline(self):
+            if not self.parts or not self.parts[-1].endswith("\n"):
+                self.parts.append("\n")
+
+        def handle_starttag(self, tag, attrs):
+            tag = tag.lower()
+            attributes = dict(attrs)
+
+            if tag == "br":
+                self._newline()
+            elif tag == "li":
+                self._newline()
+                self.parts.append("- ")
+            elif tag in {"p", "div", "section", "article", "blockquote", "pre", "tr"}:
+                self._newline()
+            elif tag == "img":
+                alt = html.unescape(attributes.get("alt", "")).strip()
+                if alt:
+                    self.parts.append(alt)
+            elif tag == "a":
+                self.link_stack.append(
+                    {
+                        "href": html.unescape(attributes.get("href", "")).strip(),
+                        "start": len("".join(self.parts)),
+                    }
+                )
+
+        def handle_endtag(self, tag):
+            tag = tag.lower()
+
+            if tag == "a" and self.link_stack:
+                link = self.link_stack.pop()
+                current = "".join(self.parts)
+                link_text = current[link["start"]:].strip()
+                href = link["href"]
+                if href and not link_text:
+                    self.parts.append(href)
+            elif tag in self.BLOCK_TAGS:
+                self._newline()
+
+        def handle_data(self, data):
+            if data:
+                self.parts.append(data)
+
+        def get_text(self):
+            value = "".join(self.parts)
+            value = html.unescape(value)
+            value = value.replace("\r\n", "\n").replace("\r", "\n")
+            value = re.sub(r"[ \t]+\n", "\n", value)
+            value = re.sub(r"\n[ \t]+", "\n", value)
+            value = re.sub(r"\n{3,}", "\n\n", value)
+            return value.strip()
+
+
+    def make_display_text(value, fallback=""):
+        """
+        Return safe readable text for labels, release metadata, Markdown, and
+        GitHub release notes that may contain embedded HTML.
+        """
+        if value is None:
+            return fallback
+
+        raw = str(value)
+        if not raw.strip():
+            return fallback
+
+        # Only invoke the parser when the value resembles HTML. This preserves
+        # normal Markdown comparison operators and code text.
+        if re.search(r"</?[A-Za-z][^>]*>", raw):
+            parser = _ReadableHTMLParser()
+            try:
+                parser.feed(raw)
+                parser.close()
+                cleaned = parser.get_text()
+            except Exception:
+                cleaned = re.sub(r"<[^>]+>", "", raw)
+                cleaned = html.unescape(cleaned).strip()
+            return cleaned or fallback
+
+        return html.unescape(raw).strip() or fallback
+
+
     def show_update_result(result: dict) -> None:
         """Display the latest-release result in a compact dialog."""
         update_check_state["running"] = False
@@ -6641,17 +7126,21 @@ def launch_gui():
         container = ttk.Frame(dialog, padding=16)
         container.pack(fill="both", expand=True)
 
+        display_tag = make_display_text(result.get("tag_name"), "Unknown release")
+        display_name = make_display_text(result.get("name"), display_tag)
+        display_published = make_display_text(result.get("published_at"))
+
         if result["is_newer"]:
-            heading = f"Update available: {result['tag_name']}"
+            heading = f"Update available: {display_tag}"
             summary = (
                 f"You are running {APP_VERSION}. "
-                f"{result['name']} is available on GitHub."
+                f"{display_name} is available on GitHub."
             )
         else:
             heading = "You are up to date"
             summary = (
                 f"Installed version: {APP_VERSION}\n"
-                f"Latest published release: {result['tag_name']}"
+                f"Latest published release: {display_tag}"
             )
 
         ttk.Label(
@@ -6666,10 +7155,10 @@ def launch_gui():
             justify="left",
         ).pack(anchor="w", pady=(6, 12))
 
-        if result.get("published_at"):
+        if display_published:
             ttk.Label(
                 container,
-                text=f"Published: {result['published_at']}",
+                text=f"Published: {display_published}",
             ).pack(anchor="w", pady=(0, 8))
 
         ttk.Label(
@@ -6678,17 +7167,71 @@ def launch_gui():
             font=("Segoe UI", 10, "bold"),
         ).pack(anchor="w")
 
+        update_colors = COLORS.get(fields["theme"].get(), COLORS["dark"])
         notes = scrolledtext.ScrolledText(
             container,
             height=12,
             wrap="word",
             font=("Segoe UI", 9),
+            background=update_colors["console_bg"],
+            foreground=update_colors["console_fg"],
+            insertbackground=update_colors["fg"],
+            selectbackground=update_colors["select"],
+            borderwidth=0,
+            padx=8,
+            pady=8,
         )
         notes.pack(fill="both", expand=True, pady=(5, 12))
-        notes.insert(
-            "1.0",
-            result.get("body") or "No release notes were provided.",
+
+        notes.tag_configure("md_h1", font=("Segoe UI", 16, "bold"), foreground=update_colors["accent"], spacing1=8, spacing3=6)
+        notes.tag_configure("md_h2", font=("Segoe UI", 13, "bold"), foreground=update_colors["accent"], spacing1=7, spacing3=5)
+        notes.tag_configure("md_h3", font=("Segoe UI", 11, "bold"), foreground=update_colors["fg"], spacing1=6, spacing3=4)
+        notes.tag_configure("md_bold", font=("Segoe UI", 9, "bold"))
+        notes.tag_configure("md_italic", font=("Segoe UI", 9, "italic"))
+        notes.tag_configure("md_code", font=("Consolas", 9), background=update_colors["panel"], foreground=update_colors["console_fg"])
+        notes.tag_configure("md_quote", foreground=update_colors["muted"], lmargin1=18, lmargin2=18)
+        notes.tag_configure("md_list", lmargin1=18, lmargin2=34)
+
+        release_markdown = make_display_text(
+            result.get("body"),
+            "No release notes were provided.",
         )
+        in_code_block = False
+
+        for raw_line in release_markdown.splitlines(keepends=True):
+            line = raw_line.rstrip("\r\n")
+            newline = raw_line[len(line):] or "\n"
+            stripped = line.lstrip()
+
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                notes.insert("end", line + newline, "md_code")
+                continue
+
+            if in_code_block:
+                notes.insert("end", line + newline, "md_code")
+                continue
+
+            if stripped.startswith("# "):
+                notes.insert("end", stripped[2:] + newline, "md_h1")
+            elif stripped.startswith("## "):
+                notes.insert("end", stripped[3:] + newline, "md_h2")
+            elif stripped.startswith("### "):
+                notes.insert("end", stripped[4:] + newline, "md_h3")
+            elif stripped.startswith("> "):
+                notes.insert("end", stripped[2:] + newline, "md_quote")
+            elif re.match(r"^([-*+]|\d+\.)\s+", stripped):
+                notes.insert("end", stripped + newline, "md_list")
+            else:
+                start_index = notes.index("end-1c")
+                notes.insert("end", line + newline)
+                for match in re.finditer(r"`([^`]+)`", line):
+                    notes.tag_add("md_code", f"{start_index}+{match.start()}c", f"{start_index}+{match.end()}c")
+                for match in re.finditer(r"\*\*([^*]+)\*\*", line):
+                    notes.tag_add("md_bold", f"{start_index}+{match.start()}c", f"{start_index}+{match.end()}c")
+                for match in re.finditer(r"(?<!\*)\*([^*]+)\*(?!\*)", line):
+                    notes.tag_add("md_italic", f"{start_index}+{match.start()}c", f"{start_index}+{match.end()}c")
+
         notes.configure(state="disabled")
 
         button_row = ttk.Frame(container)
@@ -7550,8 +8093,8 @@ def launch_gui():
         command=show_developer_resources,
     )
     tools_menu.add_command(
-        label="Open User Developer Tools Folder",
-        command=lambda: open_path_in_windows(USER_DEVELOPER_TOOLS_DIR),
+        label="Open Developer Tools Folder",
+        command=lambda: open_path_in_windows(DEVELOPER_TOOLS_DIR),
     )
     menu_bar.add_cascade(label="Tools", menu=tools_menu)
 

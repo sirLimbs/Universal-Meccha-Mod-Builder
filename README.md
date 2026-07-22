@@ -12,7 +12,7 @@ A Windows desktop application and command-line utility for building, validating,
 
 ## Version
 
-Current release: **v1.2.0**
+Current release: **v1.2.1**
 
 ## What the application does
 
@@ -27,6 +27,20 @@ Meccha Mod Builder automates the most repetitive parts of the Unreal Engine mod-
 7. Generates `my_item.vdf`.
 8. Optionally uploads the Workshop item through SteamCMD.
 9. Records build history, timing information, logs, and completion details.
+
+## v1.2.1 features
+
+- Streamlined Workshop Manager workflow
+- Removed the duplicate Workshop-folder field from the main window
+- Automatic Published File ID detection from `my_item.vdf`
+- Steam Workshop header branding and improved tooltips
+- Workshop-aware profile and validation behavior
+- Simplified post-build summary
+- Copyable SteamCMD workshop command
+- New Developer Resources browser
+- Fourteen included Unreal Engine 5.6 map-development scripts
+- Blueprint data exporter
+- Meccha Material Factory with configurable presets
 
 ## v1.2 features
 
