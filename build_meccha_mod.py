@@ -24,7 +24,7 @@ from pathlib import Path
 # =============================================================================
 
 APP_NAME = "Meccha Mod Builder"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 MECCHA_APP_ID = "4704690"  # DO NOT CHANGE
 
@@ -723,6 +723,8 @@ ICON_DIR = RESOURCES_DIR / "icon"
 BUTTON_ICON_DIR = ICON_DIR / "buttons"
 CURSOR_DIR = RESOURCES_DIR / "cursor"
 SPINNER_DIR = RESOURCES_DIR / "spinner"
+DEVELOPER_TOOLS_DIR = RESOURCES_DIR / "developer_tools"
+USER_DEVELOPER_TOOLS_DIR = USER_DATA_DIR / "developer_tools"
 
 BUTTON_ICON_PATHS = {
     "check": BUTTON_ICON_DIR / "check.png",
@@ -2459,14 +2461,7 @@ def launch_gui():
             "The folder button opens a matching .umap location when found."
         ),
     )
-    add_entry(
-        "Workshop folder",
-        "workshop",
-        browse_workshop,
-        browse_tooltip="Select the Workshop staging folder.",
-    )
-
-    for traced_key in ("ue", "project", "plugin", "map", "workshop"):
+    for traced_key in ("ue", "project", "plugin", "map"):
         fields[traced_key].trace_add("write", update_path_control_states)
 
     root.after_idle(update_path_control_states)
@@ -2521,10 +2516,20 @@ def launch_gui():
         apply_window_icon(dialog, remember_key="workshop_manager")
 
         original_published_id = fields["publishedfileid"].get().strip()
+
+        def detect_published_id(workshop_text: str) -> str:
+            workshop_text = str(workshop_text).strip()
+            if not workshop_text:
+                return ""
+            return read_published_file_id_from_vdf(
+                Path(workshop_text).expanduser() / "my_item.vdf"
+            )
+
+        detected_published_id = detect_published_id(fields["workshop"].get())
         remembered_published_id = (
             original_published_id
             if original_published_id and original_published_id != "0"
-            else ""
+            else detected_published_id
         )
 
         mode_var = tk.StringVar(
@@ -2553,23 +2558,69 @@ def launch_gui():
         container.columnconfigure(1, weight=1)
         container.rowconfigure(3, weight=1)
 
+        workshop_header = ttk.Frame(container)
+        workshop_header.grid(
+            row=0,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            pady=(0, 14),
+        )
+        workshop_header.columnconfigure(1, weight=1)
+
+        workshop_logo = load_button_icon("workshop", 72)
+        if workshop_logo is not None:
+            ttk.Label(
+                workshop_header,
+                image=workshop_logo,
+            ).grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 14))
+
+        workshop_header_text = ttk.Frame(workshop_header)
+        workshop_header_text.grid(row=0, column=1, sticky="ew")
+
         ttk.Label(
-            container,
+            workshop_header_text,
             text="Steam Workshop Settings",
             font=("Segoe UI", 16, "bold"),
-        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        ).pack(anchor="w")
         ttk.Label(
-            container,
+            workshop_header_text,
             text=(
                 "Configure the item metadata and optional SteamCMD upload without "
                 "crowding the main build screen."
             ),
-            wraplength=700,
+            wraplength=570,
             justify="left",
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 14))
+        ).pack(anchor="w", pady=(4, 0))
 
         mode_frame = ttk.LabelFrame(container, text="Workshop item mode", padding=10)
         mode_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+
+        published_id_tooltip = {"instance": None}
+
+        def update_published_id_tooltip(detected_id: str = ""):
+            workshop_path_text = workshop_var.get().strip()
+            tooltip_text = ""
+
+            if detected_id and workshop_path_text:
+                vdf_path = Path(workshop_path_text).expanduser() / "my_item.vdf"
+                tooltip_text = f"Detected from {vdf_path}"
+
+            tooltip = published_id_tooltip.get("instance")
+            if tooltip is not None:
+                tooltip.text = tooltip_text
+
+        def refresh_detected_published_id(*_args):
+            nonlocal remembered_published_id
+            detected_id = detect_published_id(workshop_var.get())
+            if detected_id:
+                remembered_published_id = detected_id
+                update_published_id_tooltip(detected_id)
+                if mode_var.get() == "update" and published_id_var.get().strip() in {"", "0"}:
+                    published_id_var.set(detected_id)
+            else:
+                update_published_id_tooltip("")
+            return detected_id
 
         def sync_mode():
             if mode_var.get() == "create":
@@ -2700,6 +2751,7 @@ def launch_gui():
             )
             if value:
                 workshop_var.set(value)
+                refresh_detected_published_id()
 
         def choose_preview_image():
             value = filedialog.askopenfilename(
@@ -2731,6 +2783,8 @@ def launch_gui():
             "Published File ID",
             published_id_var,
         )
+        published_id_tooltip["instance"] = ToolTip(published_id_entry, "")
+        update_published_id_tooltip(detected_published_id)
 
         ttk.Label(details_content, text="Visibility").grid(
             row=4,
@@ -3128,6 +3182,23 @@ def launch_gui():
                 + published_id
             )
 
+        published_id_trace_guard = {"active": False}
+
+        def handle_published_id_change(*_args):
+            if published_id_trace_guard["active"]:
+                return
+
+            value = published_id_var.get().strip()
+            if mode_var.get() == "create" and value not in {"", "0"}:
+                published_id_trace_guard["active"] = True
+                try:
+                    mode_var.set("update")
+                    published_id_entry.configure(state="normal")
+                finally:
+                    published_id_trace_guard["active"] = False
+
+            update_workshop_action_state()
+
         def update_workshop_action_state(*_args):
             workshop_url = current_workshop_url()
             button_state = "normal" if workshop_url else "disabled"
@@ -3150,6 +3221,9 @@ def launch_gui():
                 mode_status_var.set(
                     "Enter a non-zero numeric Published File ID to update an item."
                 )
+
+        published_id_var.trace_add("write", handle_published_id_change)
+        workshop_var.trace_add("write", refresh_detected_published_id)
 
         def open_workshop_page():
             workshop_url = current_workshop_url()
@@ -4153,6 +4227,13 @@ def launch_gui():
             profile_var.set(names[0] if names else "")
 
     def save_profile():
+        if not fields["workshop"].get().strip():
+            status_var.set(
+                "Set the Workshop folder before creating a profile"
+            )
+            open_workshop_manager()
+            return
+
         name = simpledialog.askstring("Save profile", "Profile name:")
         if not name:
             return
@@ -4193,6 +4274,9 @@ def launch_gui():
         apply_theme()
         update_steamcmd_visibility()
         status_var.set(f"Loaded profile: {name}")
+
+        if not fields["workshop"].get().strip():
+            root.after_idle(open_workshop_manager)
 
     def delete_profile():
         name = profile_var.get().strip()
@@ -5269,6 +5353,23 @@ def launch_gui():
 
         return decision["approved"]
 
+    def workshop_error_results(results: list[dict]) -> list[dict]:
+        """Return blocking validation errors managed inside Workshop Manager."""
+        workshop_titles = (
+            "Workshop ",
+            "Preview image",
+            "Steam App ID",
+            "Published File ID",
+            "SteamCMD",
+        )
+
+        return [
+            result
+            for result in results
+            if result.get("level") == "error"
+            and str(result.get("title", "")).startswith(workshop_titles)
+        ]
+
     def validate_only():
         results = collect_preflight_results()
         show_preflight_report(results)
@@ -5417,6 +5518,15 @@ def launch_gui():
 
     def start_build():
         results = collect_preflight_results()
+        blocking_workshop_errors = workshop_error_results(results)
+
+        if blocking_workshop_errors:
+            status_var.set(
+                f"Workshop Manager requires attention: "
+                f"{len(blocking_workshop_errors)} blocking error(s)"
+            )
+            open_workshop_manager()
+            return
 
         if not show_preflight_report(results):
             status_var.set("Build cancelled during validation")
@@ -5694,12 +5804,19 @@ def launch_gui():
 
         workshop_path_text = fields["workshop"].get().strip()
 
+        steamcmd_workshop_command = ""
         if workshop_path_text:
+            vdf_path = Path(workshop_path_text).expanduser() / "my_item.vdf"
+            steamcmd_workshop_command = f'workshop_build_item "{vdf_path}"'
             details_lines.extend(
                 [
                     "Workshop folder",
                     "---------------",
                     workshop_path_text,
+                    "",
+                    "SteamCMD command",
+                    "----------------",
+                    steamcmd_workshop_command,
                 ]
             )
 
@@ -5744,6 +5861,21 @@ def launch_gui():
                 cursor="hand2",
             ).pack(side="left", padx=(8, 0))
 
+        if steamcmd_workshop_command:
+            def copy_steamcmd_command():
+                root.clipboard_clear()
+                root.clipboard_append(steamcmd_workshop_command)
+                root.update_idletasks()
+                status_var.set("SteamCMD command copied")
+
+            make_icon_button(
+                button_row,
+                "copy",
+                "Copy the SteamCMD workshop_build_item command.",
+                command=copy_steamcmd_command,
+                cursor="hand2",
+            ).pack(side="left", padx=(8, 0))
+
         if recovered_workshop_id:
             workshop_url = (
                 "https://steamcommunity.com/sharedfiles/filedetails/?id="
@@ -5773,6 +5905,9 @@ def launch_gui():
 
             if log_path:
                 lines.append(f"Log: {log_path}")
+
+            if steamcmd_workshop_command:
+                lines.append(f"SteamCMD: {steamcmd_workshop_command}")
 
             root.clipboard_clear()
             root.clipboard_append("\n".join(lines))
@@ -6068,6 +6203,242 @@ def launch_gui():
         """Invoke a button only when it is currently enabled."""
         if str(button.cget("state")) != "disabled":
             button.invoke()
+
+    def show_developer_resources():
+        """Browse packaged and user-added Python scripts and Unreal assets."""
+        USER_DEVELOPER_TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+
+        dialog = tk.Toplevel(root)
+        dialog.title("Developer Resources")
+        dialog.geometry("860x600")
+        dialog.minsize(700, 480)
+        dialog.transient(root)
+        apply_window_icon(dialog, remember_key="developer_resources")
+
+        container = ttk.Frame(dialog, padding=14)
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(2, weight=1)
+
+        ttk.Label(
+            container,
+            text="Developer Resources",
+            font=("Segoe UI", 16, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        ttk.Label(
+            container,
+            text=(
+                "Browse packaged helper scripts and Blueprint assets, or add your own "
+                "files to the AppData developer_tools folder."
+            ),
+            wraplength=800,
+            justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 12))
+
+        notebook = ttk.Notebook(container)
+        notebook.grid(row=2, column=0, sticky="nsew")
+
+        preview_var = tk.StringVar(value="Select a resource to view its details.")
+        selected_path = {"value": None}
+
+        def collect_resources():
+            roots = [
+                ("Packaged", DEVELOPER_TOOLS_DIR),
+                ("User", USER_DEVELOPER_TOOLS_DIR),
+            ]
+            groups = {"Python Scripts": [], "Blueprints": [], "Other": []}
+
+            for source_name, root_path in roots:
+                if not root_path.is_dir():
+                    continue
+
+                try:
+                    paths = sorted(
+                        (path for path in root_path.rglob("*") if path.is_file()),
+                        key=lambda path: str(path).lower(),
+                    )
+                except OSError:
+                    continue
+
+                for path in paths:
+                    suffix = path.suffix.lower()
+                    item = (path.name, source_name, str(path), path)
+
+                    if suffix in {".py", ".pyw"}:
+                        groups["Python Scripts"].append(item)
+                    elif suffix in {".uasset", ".umap"}:
+                        groups["Blueprints"].append(item)
+                    elif path.name.lower() != "tools.json":
+                        groups["Other"].append(item)
+
+            return groups
+
+        tree_refs = {}
+
+        def update_selection(tree):
+            selection = tree.selection()
+            if not selection:
+                selected_path["value"] = None
+                preview_var.set("Select a resource to view its details.")
+                return
+
+            values = tree.item(selection[0], "values")
+            if len(values) < 2:
+                return
+
+            path = Path(values[1])
+            selected_path["value"] = path
+
+            detail_lines = [
+                f"Name: {path.name}",
+                f"Type: {path.suffix or 'File'}",
+                f"Location: {path}",
+            ]
+
+            try:
+                detail_lines.append(f"Size: {format_file_size(path.stat().st_size)}")
+            except OSError:
+                pass
+
+            if path.suffix.lower() in {".py", ".pyw", ".txt", ".md", ".json"}:
+                try:
+                    snippet = path.read_text(encoding="utf-8-sig")[:1600].strip()
+                except (OSError, UnicodeError):
+                    snippet = ""
+
+                if snippet:
+                    detail_lines.extend(["", "Preview", "-------", snippet])
+
+            preview_var.set("\n".join(detail_lines))
+
+        for tab_name in ("Python Scripts", "Blueprints", "Other"):
+            tab = ttk.Frame(notebook, padding=8)
+            tab.columnconfigure(0, weight=1)
+            tab.rowconfigure(0, weight=1)
+            notebook.add(tab, text=tab_name)
+
+            tree = ttk.Treeview(
+                tab,
+                columns=("source", "path"),
+                show="tree headings",
+                selectmode="browse",
+            )
+            tree.heading("#0", text="Name")
+            tree.heading("source", text="Source")
+            tree.heading("path", text="Path")
+            tree.column("#0", width=240, stretch=True)
+            tree.column("source", width=90, stretch=False)
+            tree.column("path", width=420, stretch=True)
+
+            scrollbar = ttk.Scrollbar(tab, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=scrollbar.set)
+            tree.grid(row=0, column=0, sticky="nsew")
+            scrollbar.grid(row=0, column=1, sticky="ns")
+            tree.bind("<<TreeviewSelect>>", lambda _event, current=tree: update_selection(current))
+            tree_refs[tab_name] = tree
+
+        details_frame = ttk.LabelFrame(container, text="Selected resource", padding=10)
+        details_frame.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        ttk.Label(
+            details_frame,
+            textvariable=preview_var,
+            justify="left",
+            wraplength=800,
+        ).pack(fill="x")
+
+        def refresh_resources():
+            groups = collect_resources()
+
+            for tab_name, tree in tree_refs.items():
+                tree.delete(*tree.get_children())
+                for name, source_name, path_text, _path in groups[tab_name]:
+                    tree.insert(
+                        "",
+                        "end",
+                        text=name,
+                        values=(source_name, path_text),
+                    )
+
+            preview_var.set(
+                "Select a resource to view its details. "
+                "Add custom resources under the AppData developer_tools folder."
+            )
+            selected_path["value"] = None
+            status_var.set("Developer resources refreshed")
+
+        def require_selected_path():
+            path = selected_path["value"]
+            if path is None or not Path(path).exists():
+                messagebox.showwarning(
+                    "Developer Resources",
+                    "Select a resource first.",
+                    parent=dialog,
+                )
+                return None
+            return Path(path)
+
+        def open_selected():
+            path = require_selected_path()
+            if path is not None:
+                open_path_in_windows(path)
+
+        def open_selected_folder():
+            path = require_selected_path()
+            if path is not None:
+                open_path_in_windows(path.parent)
+
+        def copy_selected_path():
+            path = require_selected_path()
+            if path is None:
+                return
+            root.clipboard_clear()
+            root.clipboard_append(str(path))
+            root.update_idletasks()
+            status_var.set("Resource path copied")
+
+        button_row = ttk.Frame(container)
+        button_row.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+
+        make_icon_button(
+            button_row,
+            "refresh",
+            "Refresh the developer resource list.",
+            command=refresh_resources,
+        ).pack(side="left")
+        make_icon_button(
+            button_row,
+            "folder",
+            "Open the user developer_tools folder.",
+            command=lambda: open_path_in_windows(USER_DEVELOPER_TOOLS_DIR),
+        ).pack(side="left", padx=(8, 0))
+        make_icon_button(
+            button_row,
+            "details",
+            "Open the selected resource.",
+            command=open_selected,
+        ).pack(side="left", padx=(8, 0))
+        make_icon_button(
+            button_row,
+            "folder",
+            "Open the selected resource folder.",
+            command=open_selected_folder,
+        ).pack(side="left", padx=(8, 0))
+        make_icon_button(
+            button_row,
+            "copy",
+            "Copy the selected resource path.",
+            command=copy_selected_path,
+        ).pack(side="left", padx=(8, 0))
+        make_icon_button(
+            button_row,
+            "exit",
+            "Close Developer Resources.",
+            command=dialog.destroy,
+        ).pack(side="right")
+
+        refresh_resources()
+        apply_interactive_cursors(dialog)
 
     def open_path_in_windows(path: Path) -> None:
         """Open a file or folder using the Windows shell."""
@@ -7057,6 +7428,12 @@ def launch_gui():
     ).pack(side="left", padx=(8, 0))
     make_icon_button(
         buttons,
+        "details",
+        "Open Developer Resources for useful Python scripts and Unreal assets.",
+        command=show_developer_resources,
+    ).pack(side="left", padx=(8, 0))
+    make_icon_button(
+        buttons,
         "refresh",
         "Refresh detected project plugins.",
         command=refresh_plugins,
@@ -7168,14 +7545,13 @@ def launch_gui():
     )
     tools_menu.add_separator()
 
-    utility_scripts_menu = tk.Menu(tools_menu, tearoff=False)
-    utility_scripts_menu.add_command(
-        label="Utility scripts will appear here",
-        state="disabled",
+    tools_menu.add_command(
+        label="Developer Resources",
+        command=show_developer_resources,
     )
-    tools_menu.add_cascade(
-        label="Utility Scripts",
-        menu=utility_scripts_menu,
+    tools_menu.add_command(
+        label="Open User Developer Tools Folder",
+        command=lambda: open_path_in_windows(USER_DEVELOPER_TOOLS_DIR),
     )
     menu_bar.add_cascade(label="Tools", menu=tools_menu)
 
